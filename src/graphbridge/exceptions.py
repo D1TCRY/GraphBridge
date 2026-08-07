@@ -11,7 +11,8 @@ class GraphBridgeError(Exception):
     """Base class for errors raised by the composed GraphBridge API.
 
     Catching this type handles library-specific failures without also catching
-    unrelated application exceptions.
+    unrelated application exceptions. More specific subclasses distinguish local
+    validation, authentication, transport, HTTP, delta, and sync failures.
     """
 
 
@@ -57,7 +58,8 @@ class GraphNetworkError(GraphBridgeError):
     """Report a request that could not be completed at the network layer.
 
     This is raised only after the configured retry budget, when applicable, has
-    been exhausted.
+    been exhausted. Provider-level request details are intentionally hidden from
+    the public message to keep diagnostics predictable and safe.
     """
 
 
@@ -65,7 +67,8 @@ class GraphInvalidResponseError(GraphBridgeError):
     """Report a Microsoft Graph response with an unexpected shape.
 
     GraphBridge raises this instead of guessing when required JSON properties,
-    collection entries, or continuation links are malformed.
+    collection entries, or continuation links are malformed. GraphBridge rejects
+    partial data instead of constructing a resource with uncertain identity.
     """
 
 
@@ -100,7 +103,8 @@ class GraphUnsupportedOperationError(GraphBridgeError):
     """Report an operation unavailable on stable Microsoft Graph v1.0.
 
     The library does not silently substitute beta endpoints or emulate a
-    capability whose stable semantics are unavailable.
+    capability whose stable semantics are unavailable. It therefore marks a
+    deliberate library boundary rather than a transient service failure.
     """
 
 
@@ -145,7 +149,8 @@ class GraphPermissionError(GraphRequestError):
     """Report HTTP 403 when Graph rejects the caller's authorization.
 
     This generally indicates missing application permissions or a missing
-    resource assignment for a Selected permission.
+    resource assignment for a Selected permission. Retrying without correcting
+    authorization is not expected to resolve this condition.
     """
 
 
@@ -153,7 +158,8 @@ class GraphNotFoundError(GraphRequestError):
     """Report HTTP 404 when a requested Graph resource does not exist.
 
     It is also used by explicit name-resolution helpers when enumeration finds
-    no exact match.
+    no exact match. It can therefore represent both direct HTTP lookup and safe
+    name resolution over an enumerated collection.
     """
 
 
@@ -161,7 +167,8 @@ class GraphConflictError(GraphRequestError):
     """Report HTTP 409 when a Graph operation conflicts with current state.
 
     Callers should inspect the structured error before deciding whether to retry
-    or revise the requested mutation.
+    or revise the requested mutation. It is distinct from the eTag-specific HTTP
+    412 precondition failure.
     """
 
 
@@ -169,7 +176,8 @@ class GraphGoneError(GraphRequestError):
     """Report a generic HTTP 410 response from Microsoft Graph.
 
     Recognized expired delta cursors are converted to the more specific
-    :class:`DeltaResetRequiredError` by the delta resource.
+    :class:`DeltaResetRequiredError` by the delta resource. Unrecognized 410
+    responses retain this generic form and their original Graph details.
     """
 
 
@@ -177,7 +185,8 @@ class GraphPreconditionFailedError(GraphRequestError):
     """Report an eTag or other precondition failure returned as HTTP 412.
 
     The exception keeps concurrency conflicts visible so callers can re-read or
-    re-plan instead of silently overwriting newer remote state.
+    re-plan instead of silently overwriting newer remote state. The library never
+    turns this conflict into an unconditional write.
     """
 
 
@@ -185,7 +194,8 @@ class GraphThrottlingError(GraphRequestError):
     """Report that Microsoft Graph throttled a request with HTTP 429.
 
     When available, the parsed ``Retry-After`` value is stored on the inherited
-    request-error attributes.
+    request-error attributes. The transport may already have exhausted its
+    bounded retry budget before this exception reaches application code.
     """
 
 
@@ -193,7 +203,8 @@ class GraphServerError(GraphRequestError):
     """Report an HTTP 5xx failure returned by Microsoft Graph.
 
     Safe methods may already have been retried by the transport before this
-    exception reaches the caller.
+    exception reaches the caller. Non-idempotent operations are not replayed by
+    default even when a server failure looks transient.
     """
 
 
@@ -237,7 +248,8 @@ class SyncValidationError(GraphBridgeError, ValueError):
     """Report synchronization input that is unsafe to plan or apply.
 
     This validation family prevents ambiguous matching before any mutation is
-    attempted.
+    attempted. It also derives from ``ValueError`` so callers can group invalid
+    synchronization inputs when that is convenient.
     """
 
 

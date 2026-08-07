@@ -15,6 +15,9 @@ from .models import ListInfo, ListItem, SiteInfo
 def _legacy_error_details(error: GraphAuthenticationError | GraphRequestError) -> str:
     """Format a modern Graph error for a legacy result.
 
+    This adapter preserves the historical text-oriented result contract while the
+    underlying transport uses typed exceptions.
+
     Args:
         error: Authentication or request error to format.
     """
@@ -27,7 +30,8 @@ def deduplicate_dicts(dict_list: list[dict]) -> list[dict]:
     """Remove duplicate dictionaries while preserving order.
 
     Dictionaries are compared through a stable JSON representation, so the first
-    occurrence of each equivalent mapping is retained.
+    occurrence of each equivalent mapping is retained. This helper belongs to the
+    legacy API and expects JSON-serializable dictionary values.
 
     Args:
         dict_list: Dictionaries to deduplicate.
@@ -51,6 +55,8 @@ class GbAuth(object):
 
     This compatibility class retains lazy cached credentials and tokens expected
     by existing users while its HTTP operations can share the composed client.
+    New applications should inject an Azure credential into ``GraphBridgeClient``
+    instead; this class exists for migration compatibility.
 
     Args:
         tenant_id: Microsoft Entra tenant identifier.
@@ -63,6 +69,7 @@ class GbAuth(object):
 
         Values are validated through their property setters. Credential creation
         and token acquisition remain lazy until an authenticated operation occurs.
+        Changing any authentication property later clears all related caches.
 
         Args:
             tenant_id: Microsoft Entra tenant identifier.
@@ -84,11 +91,18 @@ class GbAuth(object):
         # self.headers
     
     def __str__(self) -> str:
-        """Return a readable representation with the secret redacted."""
+        """Return a readable legacy summary with the secret redacted.
+
+        Accessing this representation does not acquire a token or reveal cached
+        authentication material.
+        """
         return f"< {self.__auth_name} | Tenant ID: {self.tenant_id}, Client ID: {self.client_id}, Client Secret: <redacted> >"
     
     def __repr__(self) -> str:
-        """Return a constructor-style representation with the secret redacted."""
+        """Return a constructor-style representation with the secret redacted.
+
+        The value is intended for diagnostics, not for reconstructing credentials.
+        """
         return (
             f"{self.__auth_name}(tenant_id={self.tenant_id!r}, client_id={self.client_id!r}, "
             "client_secret='<redacted>')"
@@ -98,7 +112,8 @@ class GbAuth(object):
     def tenant_id(self) -> str:
         """Return the Microsoft Entra tenant identifier.
 
-        The value is used when the legacy credential is created lazily.
+        The value is used when the legacy credential is created lazily. Reading
+        it has no authentication or network side effect.
         """
         return self.__tenant_id
     @tenant_id.setter
@@ -126,6 +141,7 @@ class GbAuth(object):
         """Return the application client identifier.
 
         The value identifies the Entra application used for app-only access.
+        Reading it does not initialize the cached credential.
         """
         return self.__client_id
     @client_id.setter
@@ -152,7 +168,8 @@ class GbAuth(object):
     def client_secret(self) -> str:
         """Return the application client secret.
 
-        String representations deliberately redact this sensitive value.
+        String representations deliberately redact this sensitive value. Callers
+        should avoid logging or persisting the returned secret.
         """
         return self.__client_secret
     @client_secret.setter
@@ -180,7 +197,8 @@ class GbAuth(object):
         """Return the cached Azure AD client-secret credential.
 
         The credential is created lazily from the configured tenant, client, and
-        secret values and is invalidated when any of them changes.
+        secret values and is invalidated when any of them changes. This property
+        creates no token until the credential is actually used.
         """
         
         if f"_{self.__auth_name}__credential" in self.__dict__:
@@ -195,6 +213,8 @@ class GbAuth(object):
 
         Unlike the composed transport, this property intentionally preserves the
         original legacy behavior of caching the token string after acquisition.
+        This differs from the modern transport, which delegates renewal to the
+        credential for every request attempt.
         """
         
         if f"_{self.__auth_name}__token" in self.__dict__:
@@ -215,24 +235,36 @@ class GbAuth(object):
         """Return the legacy Microsoft Graph authorization headers.
 
         Accessing this property may trigger lazy credential and token acquisition.
+        Prefer the modern transport, which constructs headers per request.
         """
         # Preparazione dell'header di autorizzazione per le richieste Graph
         return {'Authorization': f'Bearer {self.token}'}
 
     def _invalidate_auth_cache(self) -> None:
-        """Clear cached credential, token, and composed client values."""
+        """Clear cached credential, token, and composed-client values.
+
+        Property setters call this so subsequent operations use the replacement
+        authentication configuration.
+        """
         self.__dict__.pop("_GbAuth__credential", None)
         self.__dict__.pop("_GbAuth__token", None)
         self.__dict__.pop("_GbAuth__graph_client", None)
 
     def _get_graph_client(self) -> GraphBridgeClient:
-        """Return the cached composed GraphBridge client."""
+        """Return or lazily create the composed client used by legacy calls.
+
+        Reusing this client lets legacy site and list objects share one transport
+        even though their public inheritance model remains unchanged.
+        """
         if "_GbAuth__graph_client" not in self.__dict__:
             self.__graph_client = GraphBridgeClient(credential=self.credential, max_retries=0)
         return self.__graph_client
 
     def _adopt_graph_client(self, client: GraphBridgeClient) -> None:
         """Reuse an existing composed GraphBridge client.
+
+        This is used when one legacy object is constructed from another and must
+        retain the same session and credential boundary.
 
         Args:
             client: Client to share with this legacy object.
@@ -246,7 +278,8 @@ class GbSite(GbAuth):
     """Provide the legacy SharePoint site interface.
 
     A site can be constructed from authentication values or an existing
-    :class:`GbAuth`, in which case the underlying composed client is reused.
+    :class:`GbAuth`, in which case the underlying composed client is reused. Site
+    metadata is fetched lazily and retained in the historical dictionary shape.
 
     Args:
         *args: Positional authentication arguments used without ``gb_auth``.
@@ -260,7 +293,8 @@ class GbSite(GbAuth):
         """Initialize the legacy site interface.
 
         Site metadata remains lazy and is fetched only when an ID or data property
-        is accessed.
+        is accessed. Injecting ``gb_auth`` reuses its modern transport while
+        preserving the legacy constructor and inheritance contract.
 
         Args:
             *args: Positional authentication arguments used without ``gb_auth``.
@@ -290,7 +324,11 @@ class GbSite(GbAuth):
             self._adopt_graph_client(gb_auth._get_graph_client())
     
     def __str__(self) -> str:
-        """Return a readable representation of the site."""
+        """Return a readable representation of the resolved legacy site.
+
+        Accessing the value may trigger lazy site metadata retrieval through
+        ``site_id``.
+        """
         return f"< {self.__site_name} | Hostname: {self.hostname}, Site Path: {self.site_path}, Site ID: {self.site_id} >"
     
     @property
@@ -381,7 +419,8 @@ class GbSite(GbAuth):
         """Return the SharePoint site identifier.
 
         Accessing the property triggers lazy metadata retrieval and returns the
-        documented warning string if Graph omitted the ID.
+        documented warning string if Graph omitted the ID. New code should treat a
+        missing ID as an error through the typed composed API instead.
         """
         return self.site_data.get("id", "<WARNING SPM | Site ID not found>")
     
@@ -392,7 +431,8 @@ class GbList(GbSite):
     """Provide the legacy SharePoint list interface.
 
     The class retains dictionary result shapes, cached metadata, local filtering,
-    heuristic field encoding, and legacy batch helpers during migration.
+    heuristic field encoding, and legacy batch helpers during migration. New code
+    should navigate to a ``SharePointListResource`` from ``GraphBridgeClient``.
 
     Args:
         *args: Positional site or authentication arguments used without ``gb_site``.
@@ -405,7 +445,8 @@ class GbList(GbSite):
         """Initialize the legacy list interface.
 
         An existing :class:`GbSite` may be injected to reuse its location,
-        credentials, and composed client; list metadata itself remains lazy.
+        credentials, and composed client; list metadata itself remains lazy. The
+        injected site and list therefore reuse one HTTP session.
 
         Args:
             *args: Positional site or authentication arguments used without ``gb_site``.
@@ -432,11 +473,17 @@ class GbList(GbSite):
             self._adopt_graph_client(gb_site._get_graph_client())
     
     def __str__(self) -> str:
-        """Return a readable representation of the list."""
+        """Return a readable representation of the resolved legacy list.
+
+        Accessing it may trigger lazy metadata retrieval through ``list_id``.
+        """
         return f"< {self.__list_obj_name} | list_name: {self.list_name}, list_id: {self.list_id} >"
     
     def __repr__(self) -> str:
-        """Return a safe constructor-style representation of the list."""
+        """Return a safe constructor-style representation of the list.
+
+        Authentication secrets and tokens are never included in the output.
+        """
         return (
             f"{self.__list_obj_name}(list_name={self.list_name!r}, hostname={self.hostname!r}, "
             f"site_path={self.site_path!r}, tenant_id={self.tenant_id!r}, client_id={self.client_id!r}, "
@@ -448,7 +495,8 @@ class GbList(GbSite):
         """Return the legacy character-to-field-code mapping.
 
         The table approximates SharePoint internal-name encoding and is retained
-        only for backward compatibility.
+        only for backward compatibility. It is a heuristic and cannot confirm the
+        actual internal field names configured on a particular list.
         """
         self.__encode_map = {
             # Spazio e punteggiatura comune
@@ -515,6 +563,7 @@ class GbList(GbSite):
         """Return the inverse legacy field-name mapping.
 
         It is generated from ``encode_map`` so encoding and decoding remain paired.
+        Access rebuilds the small mapping without contacting SharePoint.
         """
         
         self.__decode_map = {v: k for k, v in self.encode_map.items()}
@@ -524,7 +573,8 @@ class GbList(GbSite):
         """Decode legacy SharePoint field names in a row.
 
         Every encoded substring known to ``decode_map`` is replaced in each key;
-        values are preserved unchanged.
+        values are preserved unchanged. The returned dictionary is new; the input
+        row is not modified.
 
         Args:
             row: Field mapping whose keys should be decoded.
@@ -543,7 +593,8 @@ class GbList(GbSite):
         """Encode field names with the legacy character map.
 
         This heuristic is retained for compatibility only and does not verify the
-        actual internal names stored in the list schema.
+        actual internal names stored in the list schema. Prefer
+        ``ColumnsResource.to_internal_fields`` in new code.
 
         Args:
             row: Field mapping whose keys should be encoded.
@@ -562,7 +613,8 @@ class GbList(GbSite):
     def list_name(self) -> str:
         """Return the configured SharePoint list name.
 
-        The value is used as a quoted title segment in the legacy list URL.
+        The value is used as a quoted title segment in the legacy list URL. It is
+        not guaranteed to be immutable or unique.
         """
         return self.__list_name
     @list_name.setter
@@ -590,7 +642,7 @@ class GbList(GbSite):
         """Construct the stable Graph URL for the SharePoint list.
 
         The configured list name is quoted and combined with the lazily resolved
-        site identifier.
+        site identifier. Access may therefore trigger the lazy site metadata call.
         """
         
         return f"https://graph.microsoft.com/v1.0/sites/{self.site_id}/lists/{quote(self.list_name)}"
@@ -600,7 +652,8 @@ class GbList(GbSite):
         """Fetch and cache the SharePoint list metadata.
 
         The request uses the configured title path and wraps typed transport errors
-        in the legacy ``RuntimeError`` contract.
+        in the legacy ``RuntimeError`` contract. Once loaded, the dictionary is
+        returned from the historical object cache.
         """
         
         if f"_{self.__list_obj_name}__list_data" in self.__dict__:
@@ -619,7 +672,8 @@ class GbList(GbSite):
         """Return the SharePoint list identifier.
 
         Access triggers lazy metadata retrieval and falls back to the documented
-        warning string when the response omits an ID.
+        warning string when the response omits an ID. New code receives an
+        explicit response-validation error instead.
         """
         
         return self.list_data.get("id", f"<WARNING {self.__list_obj_name} | Element ID not found>")
@@ -629,7 +683,8 @@ class GbList(GbSite):
         """Return all list items across every page.
 
         The method eagerly follows every continuation link and preserves the raw
-        legacy dictionary shape rather than returning typed item models.
+        legacy dictionary shape rather than returning typed item models. The
+        initial ``top`` value is not reapplied to server continuation links.
 
         Args:
             top: Requested page size for the initial Graph call.
@@ -655,7 +710,8 @@ class GbList(GbSite):
         """Fetch the first page of items in the SharePoint list.
 
         Despite its historical name, this property performs one collection call;
-        ``list_items_all`` is the paginated variant.
+        ``list_items_all`` is the paginated variant. The returned value retains
+        raw legacy dictionaries rather than typed models.
         """
         
         items_url = f"{self.list_url}/items?expand=fields"
@@ -673,7 +729,8 @@ class GbList(GbSite):
         """Return field dictionaries for all paginated list items.
 
         Item metadata is discarded and only each item's ``fields`` mapping is
-        retained in the legacy result.
+        retained in the legacy result. Access eagerly downloads the complete item
+        collection through ``list_items_all``.
         """
         
         self.__list_rows = [item["fields"] for item in self.list_items_all]
@@ -684,7 +741,7 @@ class GbList(GbSite):
         """Return identifiers from all paginated list items.
 
         Entries without an ``id`` property are omitted to preserve the legacy
-        collection shape.
+        collection shape. Access performs a fresh complete paginated read.
         """
         
         return [item.get("id", "None") for item in self.list_items_all if "id" in item]
@@ -694,7 +751,8 @@ class GbList(GbSite):
         """Return field names observed on the first list row.
 
         An empty list produces an empty result, and heterogeneous later rows are
-        not inspected for additional fields.
+        not inspected for additional fields. Computing the value performs the
+        same complete read used by ``list_rows``.
         """
         
         rows = self.list_rows

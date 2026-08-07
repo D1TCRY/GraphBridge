@@ -23,6 +23,7 @@ def iter_pages(
 
     Query parameters are applied only to the first request. Each continuation
     link returned by Graph is then forwarded verbatim through the safe transport.
+    No network request occurs until iteration starts.
 
     Args:
         transport: Transport used for collection requests.
@@ -67,7 +68,8 @@ def iter_items(
     """Lazily yield all items from a paginated collection.
 
     This is a convenience layer over :func:`iter_pages` and does not materialize
-    the complete collection in memory.
+    the complete collection in memory. Stopping early prevents subsequent pages
+    from being requested.
 
     Args:
         transport: Transport used for collection requests.
@@ -81,6 +83,9 @@ def iter_items(
 
 def _optional_link(value: object) -> str | None:
     """Validate an optional Graph continuation link.
+
+    A missing link ends pagination; a present link must be a non-empty string so
+    the transport can validate and follow it safely.
 
     Args:
         value: Link value returned by Graph.

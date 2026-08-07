@@ -35,6 +35,8 @@ class SyncService:
 
     The service separates read-only planning from mutation so applications can
     inspect business-key matches, field differences, eTags, and prune decisions.
+    It is available as ``sharepoint_list.sync`` and deliberately leaves durable
+    state and business conflict policy to the application.
 
     Args:
         client: Shared GraphBridge client.
@@ -45,6 +47,9 @@ class SyncService:
         self, client: GraphBridgeClient, sharepoint_list: SharePointListResource
     ) -> None:
         """Initialize the synchronization service.
+
+        Construction links the service to the parent item resource and performs
+        no read or write by itself.
 
         Args:
             client: Shared GraphBridge client.
@@ -69,7 +74,8 @@ class SyncService:
         Source rows are materialized once, key safety is validated on both sides,
         and remote state is read once with only the fields needed for comparison.
         Extra SharePoint fields do not cause updates because only source-owned
-        fields are compared.
+        fields are compared. Planning performs one complete remote enumeration
+        but never mutates SharePoint.
 
         Args:
             rows: Source rows to compare with SharePoint.
@@ -147,7 +153,8 @@ class SyncService:
         Mutations run in create, PATCH-update, then delete order. If any create
         fails, all planned deletes are deferred so pruning cannot remove data while
         a desired replacement is missing. Successful batch subrequests are never
-        replayed during transient retries.
+        replayed during transient retries. A dry-run plan returns immediately
+        without issuing any write.
 
         Args:
             plan: Synchronization plan to apply.
@@ -266,7 +273,8 @@ class SyncService:
         """Retry only failed or deferred operations.
 
         A reduced plan is derived from the previous correlated outcomes, excluding
-        all work that already succeeded.
+        all work that already succeeded. For eTag conflicts, re-planning is often
+        safer than retrying stale operations unchanged.
 
         Args:
             result: Previous synchronization result.
@@ -292,6 +300,7 @@ class SyncService:
 
         This adapter reuses items already downloaded by ``GbList.upload`` and
         preserves the legacy assumption that supplied keys are SharePoint item IDs.
+        New code should use business-key planning through :meth:`plan` instead.
 
         Args:
             rows: Legacy source rows.
@@ -404,7 +413,8 @@ class SyncService:
 
         Matching rows become updates only when source-owned values differ;
         unmatched source rows become creates and remote-only rows are either kept
-        or planned for deletion according to ``prune``.
+        or planned for deletion according to ``prune``. Duplicate or missing keys
+        are rejected before an executable plan is produced.
 
         Args:
             source: Normalized source rows.
@@ -524,7 +534,8 @@ class SyncService:
         """Apply create operations in batches.
 
         Each chunk is isolated so an outer GraphBridge error is recorded against
-        only the operations affected by that batch call.
+        only the operations affected by that batch call. Each chunk remains within
+        Microsoft Graph's twenty-subrequest limit.
 
         Args:
             operations: Create operations to apply.
@@ -557,7 +568,8 @@ class SyncService:
         """Apply update operations in batches.
 
         Planned eTags travel with individual PATCH subrequests, preserving the
-        optimistic-concurrency snapshot captured during planning.
+        optimistic-concurrency snapshot captured during planning. An HTTP 412 is
+        recorded as an operation failure rather than overwritten.
 
         Args:
             operations: Update operations to apply.
@@ -593,7 +605,8 @@ class SyncService:
         """Apply delete operations in batches.
 
         This phase is invoked only after the create-safety barrier has confirmed
-        that no desired creation failed.
+        that no desired creation failed. This sequencing is the service's primary
+        protection against data loss during replacement-like synchronization.
 
         Args:
             operations: Delete operations to apply.
@@ -627,7 +640,8 @@ class SyncService:
         """Apply create and update operations directly.
 
         Direct mode is primarily used by compatibility paths and records each
-        exception independently instead of using the JSON batch endpoint.
+        exception independently instead of using the JSON batch endpoint. It is
+        mainly useful for compatibility and specialized debugging.
 
         Args:
             creates: Create operations to apply.
@@ -777,7 +791,10 @@ class SyncService:
 
     @staticmethod
     def _graph_error(caught: GraphBridgeError) -> GraphError:
-        """Convert a GraphBridge exception into a structured error.
+        """Convert any GraphBridge exception into a structured result error.
+
+        Existing Graph request details are preserved; other library failures gain
+        a stable code based on their exception type.
 
         Args:
             caught: Exception to convert.
@@ -838,7 +855,8 @@ class SyncService:
         """Validate source keys and return key/index pairs.
 
         Missing, empty, and unhashable values are rejected before any remote
-        comparison or mutation can proceed.
+        comparison or mutation can proceed. Returned indexes preserve source
+        ordering for later result correlation.
 
         Args:
             rows: Normalized source rows.
@@ -868,7 +886,7 @@ class SyncService:
         """Validate remote keys and return key/index pairs.
 
         Remote items follow the same safety rules as source rows so every planned
-        match is deterministic.
+        match is deterministic. Error locations include item IDs for diagnosis.
 
         Args:
             items: Remote SharePoint items.
@@ -893,7 +911,9 @@ class SyncService:
 
     @staticmethod
     def _empty_key(value: Any) -> bool:
-        """Return whether a synchronization key is empty.
+        """Return whether a synchronization key is absent or an empty string.
+
+        Other false-like scalar values, such as zero, remain valid keys.
 
         Args:
             value: Key value to inspect.
@@ -921,7 +941,10 @@ class SyncService:
 
     @staticmethod
     def _duplicates(values: Sequence[tuple[Any, str]]) -> dict[Any, list[str]]:
-        """Collect duplicate keys and their locations.
+        """Collect only duplicate keys and all of their input locations.
+
+        Unique keys are omitted from the returned mapping to keep validation
+        errors focused.
 
         Args:
             values: Key and location pairs.
@@ -956,7 +979,9 @@ class SyncService:
 
     @staticmethod
     def _chunks(values: Sequence[SyncOperation]) -> Iterable[Sequence[SyncOperation]]:
-        """Split operations into Graph batch-sized chunks.
+        """Split ordered operations into Graph-compatible chunks of twenty.
+
+        Original order is preserved for deterministic result correlation.
 
         Args:
             values: Ordered synchronization operations.

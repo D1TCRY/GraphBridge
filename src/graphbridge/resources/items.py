@@ -36,7 +36,8 @@ class ListItemsResource:
     """Read and mutate SharePoint list items.
 
     The resource combines typed CRUD, controlled queries, lazy pagination, delta
-    traversal, version shortcuts, field-name translation, and batch helpers.
+    traversal, version shortcuts, field-name translation, and batch helpers. It
+    is available as ``sharepoint_list.items`` and is the primary content API.
 
     Args:
         client: Shared GraphBridge client.
@@ -45,6 +46,8 @@ class ListItemsResource:
 
     def __init__(self, client: GraphBridgeClient, sharepoint_list: SharePointListResource) -> None:
         """Initialize the list-items resource.
+
+        Construction stores the parent list scope and performs no network request.
 
         Args:
             client: Shared GraphBridge client.
@@ -67,7 +70,8 @@ class ListItemsResource:
         """Return the first page of list items.
 
         Server-side filtering is the default. Local filtering must be requested
-        explicitly and is evaluated once against each downloaded page.
+        explicitly and is evaluated once against each downloaded page. Use
+        :meth:`iter_all` for a complete potentially multi-page result.
 
         Args:
             fields: Optional SharePoint fields to expand.
@@ -102,7 +106,8 @@ class ListItemsResource:
         """Lazily iterate through list-item pages.
 
         The first request is delayed until iteration, and subsequent Graph links
-        are forwarded exactly without rebuilding the original query.
+        are forwarded exactly without rebuilding the original query. Stopping
+        iteration early prevents later requests.
 
         Args:
             fields: Optional SharePoint fields to expand.
@@ -153,6 +158,7 @@ class ListItemsResource:
 
         This flattens page results while retaining lazy retrieval, making it
         suitable for collections that should not be loaded into memory at once.
+        The first request is still deferred until iteration begins.
 
         Args:
             fields: Optional SharePoint fields to expand.
@@ -183,7 +189,8 @@ class ListItemsResource:
         """Retrieve one SharePoint list item.
 
         Requested fields are expanded in the same call and the response is parsed
-        into a model that preserves both convenient fields and raw metadata.
+        into a model that preserves both convenient fields and raw metadata. Its
+        eTag can protect a later conditional update or delete.
 
         Args:
             item_id: Graph list-item identifier.
@@ -212,6 +219,8 @@ class ListItemsResource:
 
         Display-name mode resolves the list schema before writing. Empty Graph
         successes are represented explicitly rather than confused with empty JSON.
+        The returned model therefore represents both full and minimal Graph
+        success shapes consistently.
 
         Args:
             fields: Field values for the new item.
@@ -235,7 +244,8 @@ class ListItemsResource:
         """Update fields on one SharePoint list item.
 
         The stable endpoint patches the item's ``fields`` facet. Supplying an eTag
-        enables optimistic concurrency and exposes stale writes as HTTP 412.
+        enables optimistic concurrency and exposes stale writes as HTTP 412. The
+        library never silently retries a business-level concurrency conflict.
 
         Args:
             item_id: Graph list-item identifier.
@@ -262,7 +272,8 @@ class ListItemsResource:
         """Delete one SharePoint list item.
 
         An optional eTag can protect against deleting a remotely changed item, and
-        a successful response is required to have no JSON body.
+        a successful response is required to have no JSON body. Because the
+        operation is destructive, callers should resolve item IDs explicitly.
 
         Args:
             item_id: Graph list-item identifier.
@@ -627,7 +638,10 @@ class ListItemsResource:
 
     @property
     def _base_path(self) -> str:
-        """Return the Graph path for list items."""
+        """Return the stable Graph path for items in the bound list.
+
+        Site and list IDs are quoted independently before child paths are added.
+        """
         site_id = quote(self.sharepoint_list.site.id, safe=",")
         list_id = quote(self.sharepoint_list.id, safe="")
         return f"/sites/{site_id}/lists/{list_id}/items"

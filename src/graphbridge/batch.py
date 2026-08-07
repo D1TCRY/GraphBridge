@@ -27,7 +27,9 @@ class BatchRequest:
     """Represent one request in a Microsoft Graph JSON batch.
 
     Subrequests use paths relative to the configured v1.0 root and carry their
-    own correlation ID, optional headers, body, and original input position.
+    own correlation ID, optional headers, body, and original input position. This
+    low-level primitive is normally created by resource batch helpers rather than
+    by first-time users of the library.
 
     Args:
         id: Identifier used to correlate the subrequest.
@@ -50,6 +52,8 @@ class BatchRequest:
 
         Validation prevents beta or absolute URLs and rejects embedded bearer
         authorization because authentication belongs to the outer batch call.
+        Caller-only correlation metadata is deliberately omitted from the wire
+        payload.
 
         Returns:
             A JSON-compatible subrequest mapping.
@@ -86,7 +90,8 @@ class BatchResponse:
     """Represent one batch response and its original request.
 
     Correlation is retained even when Microsoft Graph returns subresponses in a
-    different order from the submitted requests.
+    different order from the submitted requests. Resource helpers later convert
+    this wire-level object into a typed per-input result.
 
     Args:
         request: Original correlated batch request.
@@ -106,7 +111,8 @@ class BatchResponse:
     def succeeded(self) -> bool:
         """Return whether the subrequest completed successfully.
 
-        Any HTTP status in the inclusive 200-299 range is treated as success.
+        Any HTTP status in the inclusive 200-299 range is treated as success. A
+        resource may still reject a successful response with an invalid body.
         """
         return 200 <= self.status_code < 300
 
@@ -114,7 +120,8 @@ class BatchResponse:
         """Convert a failed subresponse into a structured Graph error.
 
         The generated error includes correlation and attempt metadata so partial
-        batch failures can be traced back to their original inputs.
+        batch failures can be traced back to their original inputs. The complete
+        response body remains available separately on the response object.
         """
         error_payload: Mapping[str, Any] = {}
         if isinstance(self.body, Mapping) and isinstance(self.body.get("error"), Mapping):
@@ -142,7 +149,8 @@ def chunks(values: Sequence[T], size: int = MAX_BATCH_REQUESTS) -> Iterator[Sequ
     """Split values into Graph-compatible batch chunks.
 
     Microsoft Graph accepts at most twenty requests per JSON batch, so larger
-    sequences are divided without changing their order.
+    sequences are divided without changing their order. Each returned slice can
+    be sent independently while retaining deterministic caller correlation.
 
     Args:
         values: Ordered values to split.
@@ -161,7 +169,8 @@ def batch_payload(requests: Sequence[BatchRequest]) -> dict[str, list[dict[str, 
     """Build the payload for one Graph batch call.
 
     Request IDs are validated case-insensitively because response correlation
-    treats IDs the same way.
+    treats IDs the same way. Validation occurs before the outer HTTP request, so
+    malformed work fails locally and deterministically.
 
     Args:
         requests: Subrequests to include in the batch.
@@ -269,7 +278,10 @@ def execute_batch(
 
 
 def _parse_batch_responses(payload: Any, expected: Mapping[str, BatchRequest]) -> dict[str, dict[str, Any]]:
-    """Validate and index raw batch responses by request ID.
+    """Validate and index raw batch responses by normalized request ID.
+
+    Missing, duplicate, unknown, or malformed subresponses are rejected because
+    any of them would make input correlation unsafe.
 
     Args:
         payload: Decoded Graph batch response.
@@ -308,7 +320,10 @@ def _parse_batch_responses(payload: Any, expected: Mapping[str, BatchRequest]) -
 
 
 def _validate_unique_ids(requests: Sequence[BatchRequest]) -> None:
-    """Ensure request IDs are unique case-insensitively.
+    """Ensure request IDs are non-empty and unique case-insensitively.
+
+    IDs that normalize to the same value cannot be correlated reliably when
+    Graph returns the corresponding subresponses.
 
     Args:
         requests: Batch requests to validate.
@@ -322,7 +337,9 @@ def _validate_unique_ids(requests: Sequence[BatchRequest]) -> None:
 
 
 def _normalized_id(value: str) -> str:
-    """Normalize a request identifier.
+    """Normalize a request identifier for stable response correlation.
+
+    The same rule is applied to submitted request IDs and returned response IDs.
 
     Args:
         value: Identifier to normalize.
@@ -331,7 +348,9 @@ def _normalized_id(value: str) -> str:
 
 
 def _is_transient(status: int) -> bool:
-    """Return whether a status is eligible for retry.
+    """Return whether a batch subresponse status is eligible for retry.
+
+    Permission, validation, and concurrency failures are deliberately final.
 
     Args:
         status: HTTP status code.
@@ -340,7 +359,9 @@ def _is_transient(status: int) -> bool:
 
 
 def _header(headers: Mapping[str, Any], name: str) -> str | None:
-    """Read a header case-insensitively.
+    """Read a decoded batch-response header case-insensitively.
+
+    Values are normalized to text because batch headers arrive as JSON data.
 
     Args:
         headers: Response header mapping.
@@ -354,7 +375,9 @@ def _header(headers: Mapping[str, Any], name: str) -> str | None:
 
 
 def _retry_after_seconds(value: str | None) -> float | None:
-    """Parse a Retry-After value into seconds.
+    """Parse ``Retry-After`` into a non-negative delay in seconds.
+
+    Invalid values return ``None`` so bounded exponential backoff can be used.
 
     Args:
         value: Header value as seconds or an HTTP date.

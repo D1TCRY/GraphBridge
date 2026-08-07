@@ -23,6 +23,9 @@ class GraphBridgeClient:
 
     A client owns one transport and exposes site navigation through ``sites``.
     Every bound resource created from it reuses the same session and credential.
+    New users should normally create one client per configuration, resolve a
+    site through ``client.sites``, and keep that client alive for the complete
+    unit of work so HTTP connections can be reused.
 
     Args:
         credential: Credential used when constructing a transport.
@@ -57,6 +60,8 @@ class GraphBridgeClient:
 
         Callers may inject a complete transport or let the client construct one
         from a credential, but those two construction modes cannot be mixed.
+        Credential-based construction is the normal application path; transport
+        injection is useful for tests or advanced shared-network configuration.
 
         Args:
             credential: Credential used when no transport is supplied.
@@ -100,7 +105,8 @@ class GraphBridgeClient:
         """Close the shared HTTP transport.
 
         This releases the reusable HTTP session and should be called when the
-        client is no longer needed.
+        client is no longer needed. Closing does not revoke credentials or alter
+        any SharePoint resource; it only releases local networking resources.
         """
         self.transport.close()
 
@@ -108,6 +114,8 @@ class GraphBridgeClient:
         """Return the client when entering a context manager.
 
         Context-manager use provides deterministic cleanup of the HTTP session.
+        The returned object is the same client, so resources are accessed in the
+        usual way inside the ``with`` block.
         """
         return self
 
@@ -115,6 +123,7 @@ class GraphBridgeClient:
         """Close the client when leaving a context manager.
 
         Cleanup occurs whether the managed block succeeds or raises an exception.
+        Exceptions from the managed block are not suppressed.
 
         Args:
             *_args: Context-manager exception details, if any.
@@ -125,6 +134,7 @@ class GraphBridgeClient:
         """Return a safe representation of the client.
 
         Authentication material is omitted; only the transport's safe summary is
-        included.
+        included. The result can be logged when diagnosing configuration without
+        printing the injected credential or bearer token.
         """
         return f"GraphBridgeClient(transport={self.transport!r})"

@@ -43,6 +43,8 @@ class GraphTransport:
 
     The transport centralizes authentication, timeouts, retry policy, safe URL
     resolution, response decoding, token redaction, and typed HTTP errors.
+    Resource classes use this boundary instead of calling ``requests`` directly,
+    giving the entire library one consistent network and security policy.
 
     Args:
         credential: Credential used to acquire Microsoft Graph tokens.
@@ -75,6 +77,8 @@ class GraphTransport:
 
         Configuration is rejected eagerly so every later request has a finite
         timeout, bounded retry behavior, and a safe Microsoft Graph v1.0 root.
+        An injected session supports controlled pooling or tests; otherwise a
+        reusable ``requests.Session`` is created internally.
 
         Args:
             credential: Credential used to acquire access tokens.
@@ -131,6 +135,8 @@ class GraphTransport:
         A fresh token is requested for every attempt. Safe methods retry eligible
         network, throttling, and server failures within the configured budget;
         non-idempotent methods are not replayed unless explicitly requested.
+        Authorization is rebuilt after caller headers on every attempt so a
+        stale or foreign bearer token cannot be forwarded accidentally.
 
         Args:
             method: HTTP method to send.
@@ -202,6 +208,7 @@ class GraphTransport:
         """Send a GET request through the shared request pipeline.
 
         GET is retry-eligible by default because it is treated as idempotent.
+        Collection pagination and ordinary metadata reads use this helper.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -213,6 +220,7 @@ class GraphTransport:
         """Send a POST request through the shared request pipeline.
 
         POST is not retried automatically by default to avoid duplicating writes.
+        Callers must make any replay decision explicitly for the target endpoint.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -224,7 +232,8 @@ class GraphTransport:
         """Send a PATCH request through the shared request pipeline.
 
         PATCH is not retried automatically by default because replay safety
-        depends on the operation and its concurrency conditions.
+        depends on the operation and its concurrency conditions. Batch retry is
+        handled separately per failed subrequest.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -235,7 +244,8 @@ class GraphTransport:
     def put(self, url: str, **kwargs: Any) -> Any:
         """Send a PUT request through the shared request pipeline.
 
-        PUT is considered idempotent and is retry-eligible by default.
+        PUT is considered idempotent and is retry-eligible by default. The target
+        endpoint's documented semantics still determine appropriate usage.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -247,7 +257,8 @@ class GraphTransport:
         """Send a DELETE request through the shared request pipeline.
 
         DELETE is retry-eligible by default and can include caller-provided
-        conditional headers such as ``If-Match``.
+        conditional headers such as ``If-Match``. Resource methods expose eTags
+        so callers can avoid deleting a concurrently changed item.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -259,16 +270,23 @@ class GraphTransport:
         """Close the underlying HTTP session.
 
         Closing releases connection-pool resources owned by the injected or
-        internally created session.
+        internally created session. It does not revoke the injected credential or
+        change any remote SharePoint state.
         """
         self.session.close()
 
     def __enter__(self) -> GraphTransport:
-        """Return the transport when entering a context manager."""
+        """Return this transport when entering a context manager.
+
+        The context manager provides deterministic session cleanup and does not
+        create a second transport.
+        """
         return self
 
     def __exit__(self, *_args: object) -> None:
         """Close the transport when leaving a context manager.
+
+        Exceptions raised inside the managed block are not suppressed.
 
         Args:
             *_args: Context-manager exception details, if any.
@@ -276,7 +294,11 @@ class GraphTransport:
         self.close()
 
     def __repr__(self) -> str:
-        """Return a representation containing only safe configuration."""
+        """Return a representation containing only safe configuration.
+
+        Credential objects, headers, and bearer tokens are excluded so the value
+        can be used in diagnostic logs.
+        """
         return f"GraphTransport(base_url={self.base_url!r}, timeout={self.timeout!r}, max_retries={self.max_retries!r})"
 
     def _resolve_url(self, url: str) -> str:
@@ -284,6 +306,8 @@ class GraphTransport:
 
         Absolute continuation links are accepted only when they remain on the
         configured origin and below its v1.0 path, preventing token forwarding.
+        This is what makes server-provided pagination and delta links safe to
+        follow verbatim.
 
         Args:
             url: Relative or absolute URL to validate.
@@ -314,7 +338,8 @@ class GraphTransport:
         """Decode and redact a successful response.
 
         Empty HTTP successes remain distinct from an empty JSON object. Any
-        occurrence of the current access token is removed recursively.
+        occurrence of the current access token is removed recursively. This
+        preserves the semantic difference between an empty 204 and ``{}``.
 
         Args:
             response: Successful HTTP response.
@@ -340,7 +365,9 @@ class GraphTransport:
         """Convert a failed HTTP response into a typed exception.
 
         Graph error metadata and response headers are preserved after redaction,
-        and common status codes map to specialized exception subclasses.
+        and common status codes map to specialized exception subclasses. Callers
+        can therefore distinguish permissions, throttling, conflicts, and server
+        failures without parsing response text.
 
         Args:
             response: Failed HTTP response.
@@ -415,7 +442,8 @@ class GraphTransport:
         """Validate and normalize a Graph v1.0 base URL.
 
         The URL must be HTTPS, contain no credentials or query data, and terminate
-        at a v1.0 root used to confine later absolute links.
+        at a v1.0 root used to confine later absolute links. The normalized root
+        becomes the trust boundary for pagination and delta URLs.
 
         Args:
             value: Base URL to validate.
@@ -444,7 +472,8 @@ class GraphTransport:
         """Validate an HTTP timeout value.
 
         Both scalar timeouts and separate connect/read pairs are supported, but
-        every component must be finite and strictly positive.
+        every component must be finite and strictly positive. This prevents an
+        accidental request configuration that could block indefinitely.
 
         Args:
             value: Positive scalar or connect/read timeout pair.
@@ -464,7 +493,10 @@ class GraphTransport:
         return value
 
     def _limited_delay(self, value: float) -> float:
-        """Cap a retry delay at the configured maximum.
+        """Cap a proposed retry delay at the configured maximum.
+
+        The helper keeps server hints and exponential delays inside one finite
+        waiting policy.
 
         Args:
             value: Proposed delay in seconds.
@@ -472,7 +504,9 @@ class GraphTransport:
         return min(value, self.max_retry_delay)
 
     def _backoff_delay(self, attempt: int) -> float:
-        """Calculate exponential backoff for an attempt.
+        """Calculate exponential backoff for a zero-based retry attempt.
+
+        The result is capped separately before sleeping.
 
         Args:
             attempt: Zero-based retry attempt number.
@@ -481,7 +515,10 @@ class GraphTransport:
 
     @staticmethod
     def _retry_after_seconds(value: str | None) -> float | None:
-        """Parse a Retry-After header into seconds.
+        """Parse a ``Retry-After`` header into non-negative seconds.
+
+        Numeric values and HTTP dates are supported; invalid values return
+        ``None`` so exponential backoff can be used.
 
         Args:
             value: Header value as seconds or an HTTP date.
@@ -501,7 +538,9 @@ class GraphTransport:
 
     @staticmethod
     def _redact(value: str, token: str) -> str:
-        """Replace an access token in a string.
+        """Replace every reflected access-token occurrence in text.
+
+        Empty token values are ignored defensively.
 
         Args:
             value: Text that may contain the token.
@@ -511,7 +550,9 @@ class GraphTransport:
 
     @classmethod
     def _redact_value(cls, value: Any, token: str) -> Any:
-        """Recursively redact an access token from JSON-like data.
+        """Recursively redact an access token from JSON-like response data.
+
+        Mapping and list structure is preserved while string leaves are cleaned.
 
         Args:
             value: Value to sanitize.
@@ -527,7 +568,10 @@ class GraphTransport:
 
     @staticmethod
     def _string_or_none(value: Any) -> str | None:
-        """Convert a value to text while preserving ``None``.
+        """Normalize an optional diagnostic value to text.
+
+        Missing response metadata remains ``None`` rather than becoming the
+        misleading string ``"None"``.
 
         Args:
             value: Value to convert.

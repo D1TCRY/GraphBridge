@@ -14,7 +14,8 @@ class GraphError:
     """Store a structured Microsoft Graph error.
 
     The model keeps common diagnostic fields independent of the HTTP library and
-    preserves additional error details in ``inner_error``.
+    preserves additional error details in ``inner_error``. It is used both by
+    raised request exceptions and by partial batch or synchronization results.
 
     Args:
         code: Graph error code.
@@ -37,7 +38,8 @@ class SiteInfo:
     """Store common SharePoint site metadata.
 
     Frequently used properties are exposed directly while the complete Graph
-    payload remains available through ``raw`` for forward compatibility.
+    payload remains available through ``raw`` for forward compatibility. Resource
+    objects expose this model so common values do not require direct JSON access.
 
     Args:
         id: Graph site identifier.
@@ -57,7 +59,8 @@ class SiteInfo:
         """Build site metadata from a Graph payload.
 
         Known properties are normalized to simple optional strings without
-        discarding unknown values from the original mapping.
+        discarding unknown values from the original mapping. Required identity
+        validation is performed by the resource that consumes this model.
 
         Args:
             payload: Site response mapping.
@@ -76,7 +79,8 @@ class ListInfo:
     """Store common SharePoint list metadata.
 
     The model extracts identity, timestamps, eTag, and template information while
-    retaining expanded relationships and unknown properties in ``raw``.
+    retaining expanded relationships and unknown properties in ``raw``. Item and
+    schema operations live on the associated list resource, not on this model.
 
     Args:
         id: Graph list identifier.
@@ -106,7 +110,8 @@ class ListInfo:
         """Build list metadata from a Graph payload.
 
         The nested list facet is inspected for its template while all original
-        properties and expanded relationships remain available in ``raw``.
+        properties and expanded relationships remain available in ``raw``. A
+        missing list facet does not discard otherwise usable metadata.
 
         Args:
             payload: List response mapping.
@@ -134,6 +139,7 @@ class ListItem:
 
     Field annotations are removed from the convenient ``fields`` mapping but stay
     available in ``raw``; eTags are collected from all documented locations.
+    ``response_empty`` distinguishes an empty success from an empty JSON object.
 
     Args:
         id: Graph item identifier.
@@ -159,7 +165,8 @@ class ListItem:
         """Build a list item from a Graph payload.
 
         Field annotations are separated from business values, and a fallback ID
-        supports successful update responses that omit top-level metadata.
+        supports successful update responses that omit top-level metadata. OData
+        annotations stay in ``raw`` but are removed from business ``fields``.
 
         Args:
             payload: List-item response mapping.
@@ -191,7 +198,8 @@ class ColumnInfo:
     """Store a SharePoint column definition.
 
     Known type facets are detected for convenient inspection, and the entire
-    definition is preserved so future Graph properties are not lost.
+    definition is preserved so future Graph properties are not lost. Common
+    facets are convenient to inspect without limiting access to future facets.
 
     Args:
         id: Graph column identifier.
@@ -215,7 +223,8 @@ class ColumnInfo:
         """Build column metadata from a Graph payload.
 
         The first recognized stable type facet is exposed directly without
-        removing unknown properties from the stored raw definition.
+        removing unknown properties from the stored raw definition. Unknown
+        facets leave ``column_type`` unset instead of being guessed.
 
         Args:
             payload: Column response mapping.
@@ -237,7 +246,8 @@ class ListItemVersion:
     """Store one retained SharePoint list item version.
 
     The model exposes versioned fields and modification metadata while retaining
-    the raw response for less common version properties.
+    the raw response for less common version properties. It represents a
+    historical snapshot and is distinct from the current list item.
 
     Args:
         id: Version identifier.
@@ -260,7 +270,8 @@ class ListItemVersion:
         """Build a version from a Graph payload.
 
         Nested mappings are copied defensively so the resulting model is detached
-        from caller-owned response containers.
+        from caller-owned response containers. Tenant-specific metadata remains
+        available in ``raw``.
 
         Args:
             payload: Version response mapping.
@@ -287,7 +298,8 @@ class DeletedListItem:
     """Store a list-item tombstone returned by a delta feed.
 
     Tombstones identify deleted items without pretending that their former field
-    values are still available.
+    values are still available. Callers use it to remove the corresponding entry
+    from their own local state after processing a delta round.
 
     Args:
         id: Deleted item identifier.
@@ -304,7 +316,8 @@ class DeletedListItem:
         """Build a deletion tombstone from a Graph payload.
 
         The optional deletion state is extracted while the original delta entry
-        is retained for endpoint-specific metadata.
+        is retained for endpoint-specific metadata. Former field values are not
+        synthesized when Graph omits them.
 
         Args:
             payload: Delta entry mapping.
@@ -324,7 +337,8 @@ class DeltaResult:
     """Store one fully traversed list-item delta round.
 
     Non-deleted entries remain ``unclassified`` unless the caller supplied known
-    IDs, because the Graph feed does not label them as creates or updates.
+    IDs, because the Graph feed does not label them as creates or updates. The
+    opaque ``delta_link`` should be persisted and reused unchanged.
 
     Args:
         created: Items classified as newly created.
@@ -347,6 +361,7 @@ class DeltaResult:
         """Return the opaque delta link as a cursor alias.
 
         Callers should persist and reuse the complete link without parsing it.
+        This alias supports applications that call the same value a cursor.
         """
         return self.delta_link
 
@@ -356,7 +371,8 @@ class Page(Generic[T]):
     """Store one page from a Graph collection.
 
     Parsed items are accompanied by continuation metadata and the unchanged raw
-    payload, allowing callers to inspect endpoint-specific annotations.
+    payload, allowing callers to inspect endpoint-specific annotations. Fetching
+    a successor remains the responsibility of the lazy resource iterator.
 
     Args:
         items: Parsed items in the page.
@@ -375,7 +391,8 @@ class BatchResult(Generic[T]):
     """Store aggregate and per-input batch outcomes.
 
     Convenience success and failure lists are provided alongside ``results``,
-    which retains a correlated outcome for every original input.
+    which retains a correlated outcome for every original input. Applications
+    can therefore choose between summary consumption and detailed auditing.
 
     Args:
         successes: Successfully parsed values.
@@ -392,7 +409,8 @@ class BatchItemResult(Generic[T]):
     """Store one batch outcome in original input order.
 
     Both parsed values and raw response details are retained so callers can audit
-    partial success and retry behavior.
+    partial success and retry behavior. ``input_index`` links the response to
+    caller order even when Graph returns subresponses out of order.
 
     Args:
         input_index: Position in the original input.
@@ -420,7 +438,7 @@ class SyncFieldDifference:
     """Store one field-level synchronization difference.
 
     Recording both desired and current values makes a plan reviewable before any
-    write is authorized.
+    write is authorized. Only source-owned fields participate in this comparison.
 
     Args:
         field: Field name.
@@ -436,6 +454,7 @@ class SyncFieldDifference:
         """Serialize the field difference to a dictionary.
 
         Both source and remote values are preserved for review or audit output.
+        Serialization does not coerce either business value.
         """
         return {
             "field": self.field,
@@ -452,7 +471,8 @@ class SyncOperation:
     """Store one inspectable synchronization operation.
 
     Each operation records its business key, source and remote positions,
-    concurrency token, reason, and any field-level changes.
+    concurrency token, reason, and any field-level changes. It is the atomic unit
+    reviewed in a plan and correlated with an apply result.
 
     Args:
         operation: Operation kind.
@@ -480,7 +500,8 @@ class SyncOperation:
         """Serialize the synchronization operation to a dictionary.
 
         Nested field differences are converted recursively while operation
-        correlation metadata remains intact.
+        correlation metadata remains intact. The returned mapping is detached
+        from the operation and suitable for JSON-oriented review output.
         """
         return {
             "operation": self.operation,
@@ -500,7 +521,8 @@ class SyncPlan:
     """Store a side-effect-free synchronization plan.
 
     Creates, updates, deletes, and unchanged rows are kept separately so callers
-    can review exactly what an apply step would do.
+    can review exactly what an apply step would do. Planning reads remote state
+    but performs no write, and a dry-run plan remains non-mutating when applied.
 
     Args:
         creates: Planned create operations.
@@ -533,7 +555,7 @@ class SyncPlan:
         """Return the number of mutating operations in the plan.
 
         Unchanged rows are intentionally excluded because applying them performs
-        no remote write.
+        no remote write. This count is useful in approval summaries.
         """
         return len(self.creates) + len(self.updates) + len(self.deletes)
 
@@ -541,7 +563,8 @@ class SyncPlan:
         """Serialize the synchronization plan to a dictionary.
 
         The resulting structure contains only JSON-friendly mappings, lists, and
-        scalar values suitable for review logs or approval interfaces.
+        scalar values suitable for review logs or approval interfaces. Typed
+        operations are expanded without altering the executable plan.
         """
         def serialize(value: object) -> Any:
             """Serialize one plan entry.
@@ -576,7 +599,8 @@ class SyncOperationResult:
     """Store the outcome of one synchronization operation.
 
     An outcome distinguishes successful, failed, and deliberately deferred work
-    and retains the attempt count and status when available.
+    and retains the attempt count and status when available. Keeping the original
+    operation attached makes reduced, non-replaying retries possible.
 
     Args:
         operation: Operation that was evaluated.
@@ -599,7 +623,8 @@ class SyncOperationResult:
         """Return whether the operation succeeded without deferral.
 
         A deferred operation has no successful effect even when no ordinary Graph
-        error was raised for it.
+        error was raised for it. This property is the canonical success check
+        used when constructing retry plans.
         """
         return self.error is None and not self.deferred
 
@@ -607,7 +632,8 @@ class SyncOperationResult:
         """Serialize the operation result to a dictionary.
 
         Typed items and errors are reduced to plain reviewable structures while
-        status, attempt, and deferral information is preserved.
+        status, attempt, and deferral information is preserved. No exception
+        objects are leaked into the serialized result.
         """
         value: Any = self.value
         if isinstance(value, ListItem):
@@ -640,7 +666,9 @@ class SyncResult:
     """Store the aggregate result of applying a synchronization plan.
 
     Successful values, unchanged work, failures, and ordered operation outcomes
-    remain available together with the source plan.
+    remain available together with the source plan. The aggregate lists support
+    simple consumption while ``results`` retains one auditable outcome per work
+    item.
 
     Args:
         created: Items created successfully.
@@ -667,7 +695,8 @@ class SyncResult:
         """Build a plan containing only failed or deferred operations.
 
         Already successful mutations are excluded, preventing a retry from
-        replaying work that Graph has accepted.
+        replaying work that Graph has accepted. Applications should re-plan
+        instead when a concurrency conflict suggests remote state has changed.
         """
 
         failed = [result.operation for result in self.results if not result.succeeded]
@@ -689,12 +718,14 @@ class SyncResult:
         """Serialize the synchronization result to a dictionary.
 
         Models and structured errors are converted into reviewable plain values
-        without removing the correlation between operations and outcomes.
+        without removing the correlation between operations and outcomes. The
+        structure is intended for logs, review interfaces, or persistence.
         """
         def item(value: ListItem) -> dict[str, Any]:
             """Serialize one list item.
 
             Only the fields needed by synchronization result output are included.
+            The complete raw Graph payload intentionally remains on the model.
 
             Args:
                 value: List item to serialize.
@@ -727,7 +758,10 @@ class SyncResult:
 
 
 def _optional_string(value: object) -> str | None:
-    """Convert a value to text while preserving ``None``.
+    """Convert a payload value to text while preserving ``None``.
+
+    Graph identifiers and timestamps are normalized consistently while absent
+    optional properties remain distinguishable from empty strings.
 
     Args:
         value: Value to convert.

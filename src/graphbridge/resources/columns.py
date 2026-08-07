@@ -21,7 +21,8 @@ class ColumnsResource:
     """Read and mutate SharePoint column definitions.
 
     Besides column CRUD, this resource owns the authoritative mapping between
-    user-facing display names and SharePoint internal field names.
+    user-facing display names and SharePoint internal field names. It is available
+    as ``sharepoint_list.columns`` and shares the parent client's transport.
 
     Args:
         client: Shared GraphBridge client.
@@ -30,6 +31,9 @@ class ColumnsResource:
 
     def __init__(self, client: GraphBridgeClient, sharepoint_list: SharePointListResource) -> None:
         """Initialize the columns resource.
+
+        Construction creates an empty schema cache and performs no HTTP request;
+        definitions are loaded only when an operation needs them.
 
         Args:
             client: Shared GraphBridge client.
@@ -50,7 +54,8 @@ class ColumnsResource:
         """Return the first page of columns.
 
         This convenience method is suitable when only the initial Graph page is
-        needed; complete schema discovery should use the lazy iterators.
+        needed; complete schema discovery should use the lazy iterators. The page
+        retains both typed columns and the original Graph response.
 
         Args:
             select: Optional column properties to return.
@@ -111,7 +116,8 @@ class ColumnsResource:
     def get(self, column_id: str) -> ColumnInfo:
         """Retrieve a column by ID.
 
-        This compatibility alias delegates directly to :meth:`get_by_id`.
+        This compatibility alias delegates directly to :meth:`get_by_id`; the
+        explicit form is clearer in new code.
 
         Args:
             column_id: Graph column identifier.
@@ -123,7 +129,8 @@ class ColumnsResource:
         """Retrieve a column by its Graph ID.
 
         The response must be a JSON object containing an ID; malformed successful
-        responses fail explicitly.
+        responses fail explicitly. Direct lookup does not populate the schema
+        enumeration cache.
 
         Args:
             column_id: Graph column identifier.
@@ -141,6 +148,7 @@ class ColumnsResource:
 
         Internal-name matches take precedence. Display names are used only as an
         optional fallback and ambiguous matches are never selected arbitrarily.
+        Resolving by name may load and cache the complete schema.
 
         Args:
             name: Internal or display column name.
@@ -174,7 +182,8 @@ class ColumnsResource:
         """Create one SharePoint column definition.
 
         The mapping is forwarded without stripping unknown stable properties, and
-        a successful mutation invalidates the cached schema.
+        a successful mutation invalidates the cached schema. This administrative
+        operation changes the contract seen by every list consumer.
 
         Args:
             definition: Graph column definition payload.
@@ -198,7 +207,8 @@ class ColumnsResource:
         """Update mutable properties of a column.
 
         The immutable ID cannot appear in the changes. After Graph accepts the
-        update, the display-name mapping cache is cleared.
+        update, the display-name mapping cache is cleared. Callers should provide
+        only properties documented as mutable by Graph.
 
         Args:
             column_id: Graph column identifier.
@@ -224,7 +234,8 @@ class ColumnsResource:
         """Delete a SharePoint column.
 
         Graph must return an empty success response; the local schema cache is
-        invalidated only after that contract is satisfied.
+        invalidated only after that contract is satisfied. This destructive
+        schema action should be part of a reviewed administrative workflow.
 
         Args:
             column_id: Graph column identifier.
@@ -245,6 +256,7 @@ class ColumnsResource:
 
         The complete schema is cached to avoid repeated enumeration, while
         duplicate display names are rejected because translation would be unsafe.
+        The returned dictionary cannot mutate the internal cache.
 
         Args:
             refresh: Whether to reload the schema before mapping.
@@ -272,7 +284,8 @@ class ColumnsResource:
     def name_map(self) -> dict[str, str]:
         """Return the cached display-to-internal-name mapping.
 
-        Accessing the property loads the schema only when the cache is empty.
+        Accessing the property loads the schema only when the cache is empty. Call
+        :meth:`display_name_map` directly when a refresh is required.
         """
 
         return self.display_name_map()
@@ -283,7 +296,8 @@ class ColumnsResource:
         """Translate display names to internal field names.
 
         Keys that are already valid internal names pass through unchanged. Strict
-        mode rejects unknown names instead of guessing their encoded form.
+        mode rejects unknown names instead of guessing their encoded form. This
+        is the authoritative replacement for the legacy character codec.
 
         Args:
             fields: Field values keyed by display or internal name.
@@ -311,7 +325,8 @@ class ColumnsResource:
         """Translate known internal names to display names.
 
         Unknown internal fields are preserved, which allows system or future Graph
-        fields to remain visible to callers.
+        fields to remain visible to callers. Known translations come from the
+        cached authoritative list schema.
 
         Args:
             fields: Field values keyed by internal name.
@@ -324,12 +339,16 @@ class ColumnsResource:
         """Clear the cached column schema.
 
         The next mapping or schema lookup will enumerate columns again from Graph.
+        Column mutations call this automatically after a valid success.
         """
         self._schema_cache = None
 
     @property
     def _base_path(self) -> str:
-        """Return the Graph path for list columns."""
+        """Return the stable Graph path for columns in the bound list.
+
+        Site and list IDs are quoted as separate path components.
+        """
         site_id = quote(self.sharepoint_list.site.id, safe=",")
         list_id = quote(self.sharepoint_list.id, safe="")
         return f"/sites/{site_id}/lists/{list_id}/columns"

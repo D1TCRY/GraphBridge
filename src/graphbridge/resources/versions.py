@@ -21,6 +21,8 @@ class VersionsResource:
 
     Version availability depends on SharePoint list configuration and retention
     policy. Restore uses the stable action and does not erase existing history.
+    The resource is available as ``sharepoint_list.versions`` and shares the
+    parent client's transport.
 
     Args:
         client: Shared GraphBridge client.
@@ -31,6 +33,8 @@ class VersionsResource:
         self, client: GraphBridgeClient, sharepoint_list: SharePointListResource
     ) -> None:
         """Initialize the versions resource.
+
+        Construction records the parent list scope and performs no Graph request.
 
         Args:
             client: Shared GraphBridge client.
@@ -44,6 +48,7 @@ class VersionsResource:
         """Return the first page of retained versions.
 
         Use the lazy iterators when version history may span multiple Graph pages.
+        This convenience call requests only the initial page.
 
         Args:
             item_id: Graph list-item identifier.
@@ -55,7 +60,8 @@ class VersionsResource:
         """Lazily iterate through version pages.
 
         Continuation links are handled by the shared pagination helper and are
-        forwarded unchanged through the safe transport.
+        forwarded unchanged through the safe transport. No request occurs before
+        iteration begins.
 
         Args:
             item_id: Graph list-item identifier.
@@ -71,7 +77,7 @@ class VersionsResource:
         """Lazily iterate through all retained versions.
 
         Individual parsed versions are yielded without loading the complete
-        history into memory first.
+        history into memory first. Stopping early avoids later page requests.
 
         Args:
             item_id: Graph list-item identifier.
@@ -83,7 +89,8 @@ class VersionsResource:
         """Return all retained versions for one item.
 
         This convenience method materializes the lazy version iterator into a
-        list for callers that need the complete history at once.
+        list for callers that need the complete history at once. Prefer
+        :meth:`iter_all` when version history can be large.
 
         Args:
             item_id: Graph list-item identifier.
@@ -95,7 +102,8 @@ class VersionsResource:
         """Retrieve one retained item version.
 
         Both item and version identifiers are quoted as independent Graph path
-        segments before the response is validated and parsed.
+        segments before the response is validated and parsed. Direct lookup does
+        not enumerate the rest of the version history.
 
         Args:
             item_id: Graph list-item identifier.
@@ -115,7 +123,8 @@ class VersionsResource:
         """Restore a retained version as the current item state.
 
         The stable Graph action creates a new current version while retaining the
-        prior history, and a successful response must be empty.
+        prior history, and a successful response must be empty. Although it reads
+        from history, this method is a remote write requiring item authorization.
 
         Args:
             item_id: Graph list-item identifier.
@@ -138,6 +147,9 @@ class VersionsResource:
     def _versions_path(self, item_id: str) -> str:
         """Build the Graph path for an item's versions.
 
+        Site, list, and item identifiers are encoded independently to prevent one
+        identifier from changing the path structure.
+
         Args:
             item_id: Graph list-item identifier.
 
@@ -157,6 +169,9 @@ class VersionsResource:
     def _validate_version_id(version_id: str) -> None:
         """Validate a version identifier.
 
+        Validation occurs before URL construction so empty identifiers fail
+        locally without a network request.
+
         Args:
             version_id: Version identifier to validate.
 
@@ -172,6 +187,8 @@ class VersionsResource:
 
         Args:
             payload: Decoded Graph response.
+
+        A non-empty version ID is required before exposing the typed model.
 
         Raises:
             GraphInvalidResponseError: If the payload is invalid or lacks an ID.

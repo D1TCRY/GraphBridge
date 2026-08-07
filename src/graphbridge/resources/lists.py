@@ -28,7 +28,8 @@ class ListsResource:
     """Enumerate, resolve, and create SharePoint lists.
 
     Operations are scoped to one parent site, and every returned list resource
-    composes item, column, version, and synchronization services.
+    composes item, column, version, and synchronization services. It is reached
+    through ``site.lists`` and continues to use the parent's shared transport.
 
     Args:
         client: Shared GraphBridge client.
@@ -36,7 +37,10 @@ class ListsResource:
     """
 
     def __init__(self, client: GraphBridgeClient, site: SiteResource) -> None:
-        """Initialize the lists resource.
+        """Initialize list navigation below one bound site.
+
+        Construction stores scope and transport references but performs no HTTP
+        request.
 
         Args:
             client: Shared GraphBridge client.
@@ -57,6 +61,7 @@ class ListsResource:
 
         This compatibility method follows Graph's direct path semantics. New code
         should prefer explicit ID or name lookup to make ambiguity handling clear.
+        The supplied value is treated as one encoded Graph path segment.
 
         Args:
             identifier: List ID or title accepted by Graph.
@@ -76,7 +81,8 @@ class ListsResource:
         """Retrieve one list by its immutable Graph ID.
 
         Optional selections and expansions allow metadata and stable relationships
-        to be fetched in the same request.
+        to be fetched in the same request. Prefer immutable IDs for recurring
+        integrations because list titles are user-editable.
 
         Args:
             list_id: Graph list identifier.
@@ -90,7 +96,8 @@ class ListsResource:
         """Resolve an exact list name and reject duplicates.
 
         All pages are enumerated once so duplicate titles are detected rather than
-        allowing a direct Graph path to choose a match implicitly.
+        allowing a direct Graph path to choose a match implicitly. This performs
+        a complete paginated enumeration and is best suited to discovery.
 
         Args:
             name: Exact display or internal list name.
@@ -129,7 +136,8 @@ class ListsResource:
         """Return the first page of lists.
 
         Use :meth:`iter_pages` or :meth:`iter_all` when the collection may exceed
-        the first Graph response.
+        the first Graph response. It is a convenience method, not a complete
+        collection read.
 
         Args:
             select: Optional metadata properties to return.
@@ -148,7 +156,8 @@ class ListsResource:
         """Lazily iterate through list pages.
 
         No request is made until iteration begins, and continuation links are
-        followed without reapplying the first-page query parameters.
+        followed without reapplying the first-page query parameters. Stopping
+        iteration early prevents subsequent requests.
 
         Args:
             select: Optional metadata properties to return.
@@ -177,7 +186,7 @@ class ListsResource:
         """Lazily iterate through all lists.
 
         Items are flattened from pages while preserving lazy network access and
-        bounded memory usage.
+        bounded memory usage. The iterator is suitable for sites with many lists.
 
         Args:
             select: Optional metadata properties to return.
@@ -199,6 +208,8 @@ class ListsResource:
 
         The stable Graph endpoint accepts the list facet, description, and column
         definitions together; the response is bound as a composed list resource.
+        This schema-management action normally requires stronger authorization
+        than item CRUD.
 
         Args:
             display_name: Display name of the new list.
@@ -229,7 +240,8 @@ class ListsResource:
         """Bind known list metadata without an HTTP request.
 
         Binding is appropriate when the caller already has trusted list metadata
-        and wants to navigate subordinate resources immediately.
+        and wants to navigate subordinate resources immediately. Binding does not
+        verify current remote existence or permissions.
 
         Args:
             sharepoint_list: Existing list model or payload.
@@ -249,7 +261,11 @@ class ListsResource:
 
     @property
     def _base_path(self) -> str:
-        """Return the Graph path for lists in the parent site."""
+        """Return the stable Graph path for lists in the parent site.
+
+        Graph's comma-separated compound site ID is preserved while quoting the
+        path segment.
+        """
         return f"/sites/{quote(self.site.id, safe=',')}/lists"
 
     def _get_direct(
@@ -281,7 +297,8 @@ class SharePointListResource:
     """Represent a list and its subordinate resources.
 
     One bound object exposes ``items``, ``columns``, ``versions``, and ``sync``;
-    all of them reuse the client transport and the immutable list ID.
+        all of them reuse the client transport and the immutable list ID. This is
+        the main working object for list-level application code.
 
     Args:
         client: Shared GraphBridge client.
@@ -291,6 +308,9 @@ class SharePointListResource:
 
     def __init__(self, client: GraphBridgeClient, site: SiteResource, info: ListInfo) -> None:
         """Initialize a bound SharePoint list.
+
+        Child navigation objects are created immediately, but no network request
+        occurs during construction.
 
         Args:
             client: Shared GraphBridge client.
@@ -315,7 +335,8 @@ class SharePointListResource:
     def id(self) -> str:
         """Return the Graph list identifier.
 
-        This immutable value is used to construct subordinate resource paths.
+        This immutable value is used to construct subordinate resource paths and
+        is safer to persist than a display name.
         """
         return self.info.id
 
@@ -324,6 +345,7 @@ class SharePointListResource:
         """Return the list display name.
 
         The value is user-facing metadata and may be absent from partial responses.
+        It can be renamed or duplicated and is not a durable identity.
         """
         return self.info.display_name
 
@@ -331,7 +353,8 @@ class SharePointListResource:
     def name(self) -> str | None:
         """Return the list internal name.
 
-        It may differ from the display name and may be absent from selected payloads.
+        It may differ from the display name and may be absent from selected
+        payloads; it is also distinct from the immutable Graph ID.
         """
         return self.info.name
 
@@ -340,7 +363,8 @@ class SharePointListResource:
         """Return the complete list metadata payload.
 
         Unknown properties and relationships retrieved with ``$expand`` are
-        preserved unchanged.
+        preserved unchanged. This gives advanced callers access to data not
+        promoted to typed convenience properties.
         """
 
         return self.info.raw
@@ -373,7 +397,8 @@ class SharePointListResource:
         """Refresh list metadata in place.
 
         The current resource identity and subordinate objects remain usable while
-        its stored metadata is replaced by the newly retrieved response.
+        its stored metadata is replaced by the newly retrieved response. Existing
+        child resource objects remain attached to this list instance.
 
         Args:
             select: Optional metadata properties to return.
@@ -385,12 +410,18 @@ class SharePointListResource:
         return self
 
     def __repr__(self) -> str:
-        """Return a concise list representation."""
+        """Return a concise, credential-free list representation.
+
+        Only identity and display metadata are included.
+        """
         return f"SharePointListResource(id={self.id!r}, display_name={self.info.display_name!r})"
 
 
 def _list_info(payload: Any) -> ListInfo:
     """Validate and parse a list payload.
+
+    A non-empty Graph ID is required before subordinate resources can construct
+    safe list paths.
 
     Args:
         payload: Decoded Graph response.

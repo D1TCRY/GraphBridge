@@ -12,10 +12,12 @@ GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 @runtime_checkable
 class AccessToken(Protocol):
-    """Describe the token value returned by a credential.
+    """Describe the minimal token object accepted from a credential.
 
     Implementations expose both the bearer-token text and its expiration time,
-    matching the small portion of Azure Identity used by GraphBridge.
+    matching the small portion of Azure Identity used by GraphBridge. Application
+    code normally does not construct this protocol directly: Azure Identity
+    credentials return compatible objects from ``get_token()``.
     """
 
     token: str
@@ -28,6 +30,8 @@ class TokenCredential(Protocol):
 
     Any credential with a compatible ``get_token`` callable can be injected, so
     callers are not restricted to one concrete Azure Identity credential type.
+    This makes client-secret, certificate, managed-identity, and test credentials
+    interchangeable without coupling the rest of the library to Azure Identity.
     """
 
     @property
@@ -35,7 +39,8 @@ class TokenCredential(Protocol):
         """Return the callable that acquires an access token.
 
         The callable is expected to accept an OAuth scope and return an object
-        compatible with :class:`AccessToken`.
+        compatible with :class:`AccessToken`. GraphBridge invokes it for every
+        HTTP attempt and leaves caching and renewal to the credential provider.
         """
 
         ...
@@ -46,6 +51,8 @@ class GraphAuthenticator:
 
     Token lifetime and renewal remain the credential's responsibility. Asking
     for a token on every HTTP attempt also allows retries to use renewed tokens.
+    This class is deliberately small: it validates the credential result and
+    converts provider-specific failures into a safe GraphBridge exception.
 
     Args:
         credential: Credential that provides a ``get_token`` method.
@@ -56,7 +63,9 @@ class GraphAuthenticator:
         """Initialize the authenticator.
 
         Only the structural credential contract is required; no network request
-        is performed until :meth:`get_access_token` is called.
+        is performed until :meth:`get_access_token` is called. In normal use the
+        containing :class:`~graphbridge.transport.GraphTransport` creates this
+        object automatically.
 
         Args:
             credential: Credential used to acquire access tokens.
@@ -74,7 +83,8 @@ class GraphAuthenticator:
     def scope(self) -> str:
         """Return the configured OAuth scope.
 
-        This is normally Microsoft Graph's application ``.default`` scope.
+        This is normally Microsoft Graph's application ``.default`` scope. The
+        property is informational and does not acquire a token.
         """
         return self._scope
 
@@ -82,7 +92,9 @@ class GraphAuthenticator:
         """Acquire and validate a Microsoft Graph access token.
 
         Credential-specific failures are deliberately hidden so secrets or
-        provider details cannot leak through the public exception message.
+        provider details cannot leak through the public exception message. The
+        returned text is intended for immediate request-header construction and
+        is not cached on the authenticator.
 
         Returns:
             The non-empty access token string.
@@ -103,6 +115,7 @@ class GraphAuthenticator:
         """Return a representation that does not expose credentials.
 
         The output indicates that authentication is configured while redacting
-        the credential object itself.
+        the credential object itself. It is therefore suitable for diagnostics
+        where a normal credential representation could expose sensitive state.
         """
         return "GraphAuthenticator(scope=<configured>, credential=<redacted>)"
