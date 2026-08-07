@@ -39,7 +39,20 @@ _IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 
 
 class GraphTransport:
-    """Send authenticated requests through one reusable :class:`requests.Session`."""
+    """Send authenticated requests through one reusable HTTP session.
+
+    Args:
+        credential: Credential used to acquire Microsoft Graph tokens.
+        session: Optional HTTP session reused for all requests.
+        base_url: Microsoft Graph v1.0 base URL.
+        timeout: Connection and response timeout.
+        user_agent: Value sent in the User-Agent header.
+        max_retries: Maximum retries for eligible requests.
+        backoff_factor: Base factor used for exponential backoff.
+        max_retry_delay: Maximum delay between retries.
+        sleep: Function used to wait between retries.
+        scope: OAuth scope requested from the credential.
+    """
 
     def __init__(
         self,
@@ -55,6 +68,24 @@ class GraphTransport:
         sleep: Callable[[float], None] = time.sleep,
         scope: str = GRAPH_SCOPE,
     ) -> None:
+        """Initialize and validate the HTTP transport.
+
+        Args:
+            credential: Credential used to acquire access tokens.
+            session: Optional reusable HTTP session.
+            base_url: Microsoft Graph v1.0 base URL.
+            timeout: Connection and response timeout.
+            user_agent: Value sent in the User-Agent header.
+            max_retries: Maximum retries for eligible requests.
+            backoff_factor: Base factor used for retry delays.
+            max_retry_delay: Maximum delay between retries.
+            sleep: Function used to wait between retries.
+            scope: OAuth scope requested from the credential.
+
+        Raises:
+            TypeError: If a numeric or timeout option has an invalid type.
+            ValueError: If a URL, timeout, or retry option is outside its allowed range.
+        """
         if isinstance(max_retries, bool) or not isinstance(max_retries, int):
             raise TypeError("max_retries must be an integer")
         if max_retries < 0:
@@ -89,7 +120,25 @@ class GraphTransport:
         headers: Mapping[str, str] | None = None,
         retry: bool | None = None,
     ) -> Any:
-        """Send one Graph request and return the decoded JSON value or ``None``."""
+        """Send one authenticated Microsoft Graph request.
+
+        Args:
+            method: HTTP method to send.
+            url: Relative or permitted absolute Graph URL.
+            params: Optional query parameters.
+            json: Optional JSON request body.
+            headers: Optional additional request headers.
+            retry: Optional override for automatic retry eligibility.
+
+        Returns:
+            The decoded JSON response, or ``None`` for an empty success.
+
+        Raises:
+            GraphAuthenticationError: If an access token cannot be acquired.
+            GraphInvalidResponseError: If the URL or successful response is invalid.
+            GraphNetworkError: If the network request ultimately fails.
+            GraphRequestError: If Microsoft Graph returns a non-success status.
+        """
 
         normalized_method = method.upper()
         request_url = self._resolve_url(url)
@@ -140,33 +189,79 @@ class GraphTransport:
             raise self._build_http_error(response, token=token, retry_after=retry_after)
 
     def get(self, url: str, **kwargs: Any) -> Any:
+        """Send a GET request.
+
+        Args:
+            url: Relative or permitted absolute Graph URL.
+            **kwargs: Options forwarded to :meth:`request`.
+        """
         return self.request("GET", url, **kwargs)
 
     def post(self, url: str, **kwargs: Any) -> Any:
+        """Send a POST request.
+
+        Args:
+            url: Relative or permitted absolute Graph URL.
+            **kwargs: Options forwarded to :meth:`request`.
+        """
         return self.request("POST", url, **kwargs)
 
     def patch(self, url: str, **kwargs: Any) -> Any:
+        """Send a PATCH request.
+
+        Args:
+            url: Relative or permitted absolute Graph URL.
+            **kwargs: Options forwarded to :meth:`request`.
+        """
         return self.request("PATCH", url, **kwargs)
 
     def put(self, url: str, **kwargs: Any) -> Any:
+        """Send a PUT request.
+
+        Args:
+            url: Relative or permitted absolute Graph URL.
+            **kwargs: Options forwarded to :meth:`request`.
+        """
         return self.request("PUT", url, **kwargs)
 
     def delete(self, url: str, **kwargs: Any) -> Any:
+        """Send a DELETE request.
+
+        Args:
+            url: Relative or permitted absolute Graph URL.
+            **kwargs: Options forwarded to :meth:`request`.
+        """
         return self.request("DELETE", url, **kwargs)
 
     def close(self) -> None:
+        """Close the underlying HTTP session."""
         self.session.close()
 
     def __enter__(self) -> GraphTransport:
+        """Return the transport when entering a context manager."""
         return self
 
     def __exit__(self, *_args: object) -> None:
+        """Close the transport when leaving a context manager.
+
+        Args:
+            *_args: Context-manager exception details, if any.
+        """
         self.close()
 
     def __repr__(self) -> str:
+        """Return a representation containing only safe configuration."""
         return f"GraphTransport(base_url={self.base_url!r}, timeout={self.timeout!r}, max_retries={self.max_retries!r})"
 
     def _resolve_url(self, url: str) -> str:
+        """Resolve and validate a request URL.
+
+        Args:
+            url: Relative or absolute URL to validate.
+
+        Raises:
+            GraphInvalidResponseError: If the URL escapes the configured v1.0 root.
+        """
         target = urlsplit(url)
         resolved = url if target.scheme or target.netloc else urljoin(f"{self.base_url}/", url.lstrip("/"))
         configured = urlsplit(self.base_url)
@@ -187,6 +282,15 @@ class GraphTransport:
         return resolved
 
     def _parse_success(self, response: requests.Response, *, token: str) -> Any:
+        """Decode and redact a successful response.
+
+        Args:
+            response: Successful HTTP response.
+            token: Access token that must be redacted.
+
+        Raises:
+            GraphInvalidResponseError: If a non-empty response is not valid JSON.
+        """
         if response.status_code in {204, 205} or not response.content:
             return None
         try:
@@ -201,6 +305,13 @@ class GraphTransport:
         token: str,
         retry_after: float | None,
     ) -> GraphBridgeError:
+        """Convert a failed HTTP response into a typed exception.
+
+        Args:
+            response: Failed HTTP response.
+            token: Access token that must be redacted.
+            retry_after: Parsed retry delay, when available.
+        """
         raw_text = self._redact(response.text, token)
         payload: Any = None
         try:
@@ -266,6 +377,14 @@ class GraphTransport:
 
     @staticmethod
     def _validated_base_url(value: str) -> str:
+        """Validate and normalize a Graph v1.0 base URL.
+
+        Args:
+            value: Base URL to validate.
+
+        Raises:
+            ValueError: If the URL is not a safe HTTPS v1.0 root.
+        """
         if not isinstance(value, str) or not value:
             raise ValueError("base_url cannot be empty")
         parsed = urlsplit(value)
@@ -284,6 +403,15 @@ class GraphTransport:
     def _validated_timeout(
         value: float | tuple[float, float],
     ) -> float | tuple[float, float]:
+        """Validate an HTTP timeout value.
+
+        Args:
+            value: Positive scalar or connect/read timeout pair.
+
+        Raises:
+            TypeError: If the timeout shape or types are invalid.
+            ValueError: If any timeout is non-finite or not positive.
+        """
         values: tuple[object, ...] = value if isinstance(value, tuple) else (value,)
         if len(values) not in {1, 2}:
             raise TypeError("timeout must be a positive number or a two-number tuple")
@@ -295,13 +423,28 @@ class GraphTransport:
         return value
 
     def _limited_delay(self, value: float) -> float:
+        """Cap a retry delay at the configured maximum.
+
+        Args:
+            value: Proposed delay in seconds.
+        """
         return min(value, self.max_retry_delay)
 
     def _backoff_delay(self, attempt: int) -> float:
+        """Calculate exponential backoff for an attempt.
+
+        Args:
+            attempt: Zero-based retry attempt number.
+        """
         return self.backoff_factor * (2**attempt)
 
     @staticmethod
     def _retry_after_seconds(value: str | None) -> float | None:
+        """Parse a Retry-After header into seconds.
+
+        Args:
+            value: Header value as seconds or an HTTP date.
+        """
         if value is None:
             return None
         try:
@@ -317,10 +460,22 @@ class GraphTransport:
 
     @staticmethod
     def _redact(value: str, token: str) -> str:
+        """Replace an access token in a string.
+
+        Args:
+            value: Text that may contain the token.
+            token: Sensitive token to replace.
+        """
         return value.replace(token, "<redacted>") if token else value
 
     @classmethod
     def _redact_value(cls, value: Any, token: str) -> Any:
+        """Recursively redact an access token from JSON-like data.
+
+        Args:
+            value: Value to sanitize.
+            token: Sensitive token to replace.
+        """
         if isinstance(value, str):
             return cls._redact(value, token)
         if isinstance(value, Mapping):
@@ -331,4 +486,9 @@ class GraphTransport:
 
     @staticmethod
     def _string_or_none(value: Any) -> str | None:
+        """Convert a value to text while preserving ``None``.
+
+        Args:
+            value: Value to convert.
+        """
         return str(value) if value is not None else None

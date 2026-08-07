@@ -19,6 +19,20 @@ def iter_pages(
     params: Mapping[str, str | int] | None = None,
     parser: Callable[[Mapping[str, Any]], T],
 ) -> Iterator[Page[T]]:
+    """Lazily retrieve and parse Graph collection pages.
+
+    Args:
+        transport: Transport used for collection requests.
+        url: Initial collection URL.
+        params: Optional parameters for the first page.
+        parser: Callable that converts each raw item.
+
+    Yields:
+        Parsed collection pages.
+
+    Raises:
+        GraphInvalidResponseError: If Graph returns an invalid collection shape.
+    """
     current_url: str | None = url
     current_params = params
     while current_url is not None:
@@ -47,11 +61,27 @@ def iter_items(
     params: Mapping[str, str | int] | None = None,
     parser: Callable[[Mapping[str, Any]], T],
 ) -> Iterator[T]:
+    """Lazily yield all items from a paginated collection.
+
+    Args:
+        transport: Transport used for collection requests.
+        url: Initial collection URL.
+        params: Optional parameters for the first page.
+        parser: Callable that converts each raw item.
+    """
     for page in iter_pages(transport, url, params=params, parser=parser):
         yield from page.items
 
 
 def _optional_link(value: object) -> str | None:
+    """Validate an optional Graph continuation link.
+
+    Args:
+        value: Link value returned by Graph.
+
+    Raises:
+        GraphInvalidResponseError: If a present link is not a non-empty string.
+    """
     if value is None:
         return None
     if not isinstance(value, str) or not value:

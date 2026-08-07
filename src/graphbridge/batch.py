@@ -24,7 +24,16 @@ DEFAULT_MAX_RETRY_DELAY = 120.0
 
 @dataclass(frozen=True, slots=True)
 class BatchRequest:
-    """One relative request included in a Microsoft Graph JSON batch."""
+    """Represent one request in a Microsoft Graph JSON batch.
+
+    Args:
+        id: Identifier used to correlate the subrequest.
+        method: HTTP method for the subrequest.
+        url: URL relative to the configured v1.0 root.
+        headers: Optional subrequest headers.
+        body: Optional JSON-compatible request body.
+        input_index: Optional position in the caller's original input.
+    """
 
     id: str
     method: str
@@ -34,6 +43,14 @@ class BatchRequest:
     input_index: int | None = None
 
     def to_payload(self) -> dict[str, Any]:
+        """Serialize the subrequest for the Graph batch endpoint.
+
+        Returns:
+            A JSON-compatible subrequest mapping.
+
+        Raises:
+            ValueError: If the identifier, method, URL, or headers are unsafe.
+        """
         if not self.id:
             raise ValueError("batch request id cannot be empty")
         if not self.url.startswith("/") or self.url.startswith("//") or self.url.casefold().startswith("/beta/"):
@@ -60,7 +77,15 @@ class BatchRequest:
 
 @dataclass(frozen=True, slots=True)
 class BatchResponse:
-    """One raw batch response correlated with its original request."""
+    """Represent one batch response and its original request.
+
+    Args:
+        request: Original correlated batch request.
+        status_code: HTTP status returned for the subrequest.
+        headers: Response headers for the subrequest.
+        body: Decoded response body.
+        attempts: Number of attempts used for the subrequest.
+    """
 
     request: BatchRequest
     status_code: int
@@ -70,9 +95,11 @@ class BatchResponse:
 
     @property
     def succeeded(self) -> bool:
+        """Return whether the subrequest completed successfully."""
         return 200 <= self.status_code < 300
 
     def to_error(self) -> GraphError:
+        """Convert a failed subresponse into a structured Graph error."""
         error_payload: Mapping[str, Any] = {}
         if isinstance(self.body, Mapping) and isinstance(self.body.get("error"), Mapping):
             error_payload = self.body["error"]
@@ -96,6 +123,15 @@ class BatchResponse:
 
 
 def chunks(values: Sequence[T], size: int = MAX_BATCH_REQUESTS) -> Iterator[Sequence[T]]:
+    """Split values into Graph-compatible batch chunks.
+
+    Args:
+        values: Ordered values to split.
+        size: Maximum number of values per chunk.
+
+    Raises:
+        ValueError: If the chunk size is outside the Graph batch limit.
+    """
     if not 1 <= size <= MAX_BATCH_REQUESTS:
         raise ValueError(f"batch size must be between 1 and {MAX_BATCH_REQUESTS}")
     for index in range(0, len(values), size):
@@ -103,6 +139,14 @@ def chunks(values: Sequence[T], size: int = MAX_BATCH_REQUESTS) -> Iterator[Sequ
 
 
 def batch_payload(requests: Sequence[BatchRequest]) -> dict[str, list[dict[str, Any]]]:
+    """Build the payload for one Graph batch call.
+
+    Args:
+        requests: Subrequests to include in the batch.
+
+    Raises:
+        ValueError: If the batch is too large or request IDs are not unique.
+    """
     if len(requests) > MAX_BATCH_REQUESTS:
         raise ValueError(f"a Microsoft Graph batch accepts at most {MAX_BATCH_REQUESTS} requests")
     _validate_unique_ids(requests)
@@ -118,11 +162,23 @@ def execute_batch(
     max_retry_delay: float = DEFAULT_MAX_RETRY_DELAY,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[BatchResponse]:
-    """Execute requests in chunks and retry only transient individual failures.
+    """Execute batches and retry only transient subrequests.
 
-    Response order from Microsoft Graph is irrelevant: correlation uses the
-    case-insensitive request ``id`` and the returned list follows input order.
-    An attempt budget includes the initial request, preventing infinite retries.
+    Args:
+        transport: Transport used to call the Graph batch endpoint.
+        requests: Ordered subrequests to execute.
+        max_attempts: Maximum attempts per transient subrequest.
+        backoff_factor: Base factor used for retry delays.
+        max_retry_delay: Maximum delay between retry waves.
+        sleep: Function used to wait between retry waves.
+
+    Returns:
+        Responses correlated in original input order.
+
+    Raises:
+        TypeError: If an attempt or delay option has an invalid type.
+        ValueError: If an option is outside its allowed range.
+        GraphInvalidResponseError: If Graph returns an invalid batch response.
     """
 
     if isinstance(max_attempts, bool) or not isinstance(max_attempts, int):
@@ -187,6 +243,15 @@ def execute_batch(
 
 
 def _parse_batch_responses(payload: Any, expected: Mapping[str, BatchRequest]) -> dict[str, dict[str, Any]]:
+    """Validate and index raw batch responses by request ID.
+
+    Args:
+        payload: Decoded Graph batch response.
+        expected: Expected subrequests indexed by normalized ID.
+
+    Raises:
+        GraphInvalidResponseError: If response correlation is invalid.
+    """
     if not isinstance(payload, Mapping) or not isinstance(payload.get("responses"), list):
         raise GraphInvalidResponseError("Microsoft Graph batch response must contain responses")
     parsed: dict[str, dict[str, Any]] = {}
@@ -217,20 +282,44 @@ def _parse_batch_responses(payload: Any, expected: Mapping[str, BatchRequest]) -
 
 
 def _validate_unique_ids(requests: Sequence[BatchRequest]) -> None:
+    """Ensure request IDs are unique case-insensitively.
+
+    Args:
+        requests: Batch requests to validate.
+
+    Raises:
+        ValueError: If an identifier is duplicated.
+    """
     normalized = [_normalized_id(request.id) for request in requests]
     if len(normalized) != len(set(normalized)):
         raise ValueError("batch request ids must be unique (case-insensitive)")
 
 
 def _normalized_id(value: str) -> str:
+    """Normalize a request identifier.
+
+    Args:
+        value: Identifier to normalize.
+    """
     return value.casefold()
 
 
 def _is_transient(status: int) -> bool:
+    """Return whether a status is eligible for retry.
+
+    Args:
+        status: HTTP status code.
+    """
     return status in {408, 429} or 500 <= status <= 599
 
 
 def _header(headers: Mapping[str, Any], name: str) -> str | None:
+    """Read a header case-insensitively.
+
+    Args:
+        headers: Response header mapping.
+        name: Header name to retrieve.
+    """
     expected = name.casefold()
     for key, value in headers.items():
         if str(key).casefold() == expected:
@@ -239,6 +328,11 @@ def _header(headers: Mapping[str, Any], name: str) -> str | None:
 
 
 def _retry_after_seconds(value: str | None) -> float | None:
+    """Parse a Retry-After value into seconds.
+
+    Args:
+        value: Header value as seconds or an HTTP date.
+    """
     if value is None:
         return None
     try:

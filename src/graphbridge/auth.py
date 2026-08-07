@@ -12,22 +12,41 @@ GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 @runtime_checkable
 class AccessToken(Protocol):
+    """Describe the token value returned by a credential."""
+
     token: str
     expires_on: int
 
 
 @runtime_checkable
 class TokenCredential(Protocol):
-    """Structural subset implemented by Azure Identity credentials."""
+    """Describe the Azure Identity credential interface used by GraphBridge."""
 
     @property
-    def get_token(self) -> Callable[..., Any]: ...
+    def get_token(self) -> Callable[..., Any]:
+        """Return the callable that acquires an access token."""
+
+        ...
 
 
 class GraphAuthenticator:
-    """Acquire a fresh access token for each HTTP attempt without caching it."""
+    """Acquire Microsoft Graph tokens without caching them locally.
+
+    Args:
+        credential: Credential that provides a ``get_token`` method.
+        scope: OAuth scope requested for each access token.
+    """
 
     def __init__(self, credential: TokenCredential, *, scope: str = GRAPH_SCOPE) -> None:
+        """Initialize the authenticator.
+
+        Args:
+            credential: Credential used to acquire access tokens.
+            scope: OAuth scope requested from the credential.
+
+        Raises:
+            TypeError: If the credential does not provide ``get_token``.
+        """
         if not hasattr(credential, "get_token"):
             raise TypeError("credential must provide get_token()")
         self._credential = credential
@@ -35,9 +54,18 @@ class GraphAuthenticator:
 
     @property
     def scope(self) -> str:
+        """Return the configured OAuth scope."""
         return self._scope
 
     def get_access_token(self) -> str:
+        """Acquire and validate a Microsoft Graph access token.
+
+        Returns:
+            The non-empty access token string.
+
+        Raises:
+            GraphAuthenticationError: If acquisition fails or returns an invalid token.
+        """
         try:
             access_token = self._credential.get_token(self._scope)
             token = access_token.token
@@ -48,4 +76,5 @@ class GraphAuthenticator:
         return token
 
     def __repr__(self) -> str:
+        """Return a representation that does not expose credentials."""
         return "GraphAuthenticator(scope=<configured>, credential=<redacted>)"

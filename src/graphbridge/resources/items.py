@@ -33,9 +33,20 @@ FilterMode = Literal["server", "local"]
 
 
 class ListItemsResource:
-    """Uniform item operations for the stable Graph v1.0 listItem endpoints."""
+    """Read and mutate SharePoint list items.
+
+    Args:
+        client: Shared GraphBridge client.
+        sharepoint_list: Parent SharePoint list.
+    """
 
     def __init__(self, client: GraphBridgeClient, sharepoint_list: SharePointListResource) -> None:
+        """Initialize the list-items resource.
+
+        Args:
+            client: Shared GraphBridge client.
+            sharepoint_list: Parent SharePoint list.
+        """
         self.client = client
         self.transport = client.transport
         self.sharepoint_list = sharepoint_list
@@ -50,7 +61,16 @@ class ListItemsResource:
         filter_mode: FilterMode = "server",
         field_names: FieldNameMode = "internal",
     ) -> Page[ListItem]:
-        """Return the first page; filtering is server-side unless explicitly local."""
+        """Return the first page of list items.
+
+        Args:
+            fields: Optional SharePoint fields to expand.
+            filter: Optional raw, controlled, or mapping filter.
+            top: Optional maximum page size.
+            select: Optional item properties to return.
+            filter_mode: Whether filtering runs on the server or locally.
+            field_names: Whether supplied field names are internal or display names.
+        """
 
         return next(
             self.iter_pages(
@@ -73,11 +93,18 @@ class ListItemsResource:
         filter_mode: FilterMode = "server",
         field_names: FieldNameMode = "internal",
     ) -> Iterator[Page[ListItem]]:
-        """Lazily yield pages while forwarding ``@odata.nextLink`` verbatim.
+        """Lazily iterate through list-item pages.
 
-        ``filter_mode='local'`` is an explicit fallback. It omits ``$filter``
-        from the request and evaluates a controlled filter once as each page is
-        downloaded; it never performs a second list download.
+        Args:
+            fields: Optional SharePoint fields to expand.
+            filter: Optional raw, controlled, or mapping filter.
+            top: Optional maximum page size.
+            select: Optional item properties to return.
+            filter_mode: Whether filtering runs on the server or locally.
+            field_names: Whether supplied field names are internal or display names.
+
+        Raises:
+            ValueError: If the filter mode or local filter is invalid.
         """
 
         if filter_mode not in {"server", "local"}:
@@ -113,7 +140,16 @@ class ListItemsResource:
         filter_mode: FilterMode = "server",
         field_names: FieldNameMode = "internal",
     ) -> Iterator[ListItem]:
-        """Lazily yield items without eagerly materializing all pages."""
+        """Lazily iterate through all matching list items.
+
+        Args:
+            fields: Optional SharePoint fields to expand.
+            filter: Optional raw, controlled, or mapping filter.
+            top: Optional maximum page size.
+            select: Optional item properties to return.
+            filter_mode: Whether filtering runs on the server or locally.
+            field_names: Whether supplied field names are internal or display names.
+        """
 
         for page in self.iter_pages(
             fields=fields,
@@ -132,6 +168,16 @@ class ListItemsResource:
         fields: Sequence[str] | None = None,
         field_names: FieldNameMode = "internal",
     ) -> ListItem:
+        """Retrieve one SharePoint list item.
+
+        Args:
+            item_id: Graph list-item identifier.
+            fields: Optional SharePoint fields to expand.
+            field_names: Whether supplied field names are internal or display names.
+
+        Raises:
+            ValueError: If the item identifier is empty.
+        """
         if not item_id:
             raise ValueError("item_id cannot be empty")
         selected_fields = self._field_names(fields, field_names=field_names)
@@ -147,6 +193,15 @@ class ListItemsResource:
         *,
         field_names: FieldNameMode = "internal",
     ) -> ListItem:
+        """Create one SharePoint list item.
+
+        Args:
+            fields: Field values for the new item.
+            field_names: Whether supplied field names are internal or display names.
+
+        Raises:
+            TypeError: If fields is not a mapping.
+        """
         values = self._write_fields(fields, field_names=field_names)
         payload = self.transport.post(self._base_path, json={"fields": values})
         return self._created_item(payload, values)
@@ -159,6 +214,18 @@ class ListItemsResource:
         etag: str | None = None,
         field_names: FieldNameMode = "internal",
     ) -> ListItem:
+        """Update fields on one SharePoint list item.
+
+        Args:
+            item_id: Graph list-item identifier.
+            fields: Field values to update.
+            etag: Optional concurrency token sent with ``If-Match``.
+            field_names: Whether supplied field names are internal or display names.
+
+        Raises:
+            ValueError: If the item identifier is empty.
+            GraphPreconditionFailedError: If the supplied eTag is stale.
+        """
         if not item_id:
             raise ValueError("item_id cannot be empty")
         values = self._write_fields(fields, field_names=field_names)
@@ -171,6 +238,17 @@ class ListItemsResource:
         return self._updated_item(str(item_id), values, payload)
 
     def delete(self, item_id: str, *, etag: str | None = None) -> None:
+        """Delete one SharePoint list item.
+
+        Args:
+            item_id: Graph list-item identifier.
+            etag: Optional concurrency token sent with ``If-Match``.
+
+        Raises:
+            ValueError: If the item identifier is empty.
+            GraphPreconditionFailedError: If the supplied eTag is stale.
+            GraphInvalidResponseError: If Graph returns a non-empty success body.
+        """
         if not item_id:
             raise ValueError("item_id cannot be empty")
         headers = {"If-Match": etag} if etag is not None else None
@@ -192,14 +270,24 @@ class ListItemsResource:
         known_ids: Collection[str] | None = None,
         field_names: FieldNameMode = "internal",
     ) -> DeltaResult:
-        """Traverse one delta round and return its opaque continuation cursor.
+        """Traverse one complete list-item delta round.
 
-        When ``known_ids`` is supplied, non-deleted entries are classified as
-        ``created`` or ``modified`` against that caller-owned state. Without it,
-        Graph cannot reliably distinguish the two, so they are returned in
-        ``unclassified``. A reset-indicating HTTP 410 raises
-        :class:`DeltaResetRequiredError`; no full enumeration is started
-        automatically.
+        Args:
+            link: Optional opaque continuation or delta link.
+            token: Optional initial delta token.
+            fields: Optional SharePoint fields to expand.
+            select: Optional item properties to return.
+            top: Optional maximum page size.
+            known_ids: Optional caller-owned IDs used to classify changes.
+            field_names: Whether supplied field names are internal or display names.
+
+        Returns:
+            Classified changes and the final opaque delta link.
+
+        Raises:
+            ValueError: If a link is combined with incompatible query options.
+            DeltaResetRequiredError: If Graph requires explicit resynchronization.
+            GraphInvalidResponseError: If the delta response shape is invalid.
         """
 
         if link is not None and any(
@@ -319,12 +407,21 @@ class ListItemsResource:
         )
 
     def versions(self, item_id: str) -> builtins.list[ListItemVersion]:
-        """Return every retained stable v1.0 version for one item."""
+        """Return every retained version of one item.
+
+        Args:
+            item_id: Graph list-item identifier.
+        """
 
         return self.sharepoint_list.versions.versions(item_id)
 
     def restore_version(self, item_id: str, version_id: str) -> None:
-        """Restore a retained version as a new current version."""
+        """Restore a retained version as the current state.
+
+        Args:
+            item_id: Graph list-item identifier.
+            version_id: Version identifier to restore.
+        """
 
         return self.sharepoint_list.versions.restore_version(item_id, version_id)
 
@@ -337,6 +434,18 @@ class ListItemsResource:
         sleep: Callable[[float], None] | None = None,
         field_names: FieldNameMode = "internal",
     ) -> BatchResult[ListItem]:
+        """Create multiple list items with Graph batches.
+
+        Args:
+            records: Ordered field mappings to create.
+            max_attempts: Maximum attempts per transient subrequest.
+            backoff_factor: Base factor used for retry delays.
+            sleep: Optional function used to wait between retries.
+            field_names: Whether supplied field names are internal or display names.
+
+        Returns:
+            Aggregate and per-input create outcomes.
+        """
         values = [self._write_fields(record, field_names=field_names) for record in records]
         requests = [
             BatchRequest(
@@ -368,10 +477,21 @@ class ListItemsResource:
         sleep: Callable[[float], None] | None = None,
         field_names: FieldNameMode = "internal",
     ) -> BatchResult[ListItem]:
-        """Batch updates from records or parallel ``ids``/``fields`` sequences.
+        """Update multiple list items with Graph batches.
 
-        A record can be ``(id, fields)``, ``(id, fields, etag)`` or a mapping
-        containing ``id``/``item_id``, ``fields`` and optional ``etag``.
+        Args:
+            updates: Update records or a parallel sequence of item IDs.
+            fields: Optional field mappings paired with item IDs.
+            etag: Optional eTag applied to every update.
+            etags: Optional per-item eTags.
+            max_attempts: Maximum attempts per transient subrequest.
+            backoff_factor: Base factor used for retry delays.
+            sleep: Optional function used to wait between retries.
+            field_names: Whether supplied field names are internal or display names.
+
+        Raises:
+            ValueError: If eTag options conflict or input lengths do not match.
+            TypeError: If an update record has an invalid shape.
         """
 
         if etag is not None and etags is not None:
@@ -419,7 +539,19 @@ class ListItemsResource:
         backoff_factor: float | None = None,
         sleep: Callable[[float], None] | None = None,
     ) -> BatchResult[str]:
-        """Delete items in correlated chunks of at most 20 subrequests."""
+        """Delete multiple items with Graph batches.
+
+        Args:
+            item_ids: Item IDs or records containing IDs and optional eTags.
+            etag: Optional eTag applied to every delete.
+            etags: Optional per-item eTags.
+            max_attempts: Maximum attempts per transient subrequest.
+            backoff_factor: Base factor used for retry delays.
+            sleep: Optional function used to wait between retries.
+
+        Raises:
+            ValueError: If eTag options conflict or an ID is empty.
+        """
 
         if etag is not None and etags is not None:
             raise ValueError("etag and etags cannot both be supplied")
@@ -451,6 +583,7 @@ class ListItemsResource:
 
     @property
     def _base_path(self) -> str:
+        """Return the Graph path for list items."""
         site_id = quote(self.sharepoint_list.site.id, safe=",")
         list_id = quote(self.sharepoint_list.id, safe="")
         return f"/sites/{site_id}/lists/{list_id}/items"
@@ -458,6 +591,16 @@ class ListItemsResource:
     def _field_names(
         self, fields: Sequence[str] | None, *, field_names: FieldNameMode
     ) -> Sequence[str] | None:
+        """Translate selected field names when display mode is used.
+
+        Args:
+            fields: Optional field names to translate.
+            field_names: Field-name convention used by the caller.
+
+        Raises:
+            ValueError: If the field-name mode is invalid.
+            KeyError: If a display name is unknown.
+        """
         if fields is None or field_names == "internal":
             return fields
         if field_names != "display":
@@ -477,6 +620,16 @@ class ListItemsResource:
     def _write_fields(
         self, fields: Mapping[str, Any], *, field_names: FieldNameMode
     ) -> dict[str, Any]:
+        """Normalize fields for a write operation.
+
+        Args:
+            fields: Field values to normalize.
+            field_names: Field-name convention used by the caller.
+
+        Raises:
+            TypeError: If fields is not a mapping.
+            ValueError: If the field-name mode is invalid.
+        """
         if not isinstance(fields, Mapping):
             raise TypeError("fields must be a mapping")
         if field_names == "internal":
@@ -488,6 +641,12 @@ class ListItemsResource:
     def _filter_expression(
         self, value: FilterValue, *, field_names: FieldNameMode
     ) -> str | FilterExpression | None:
+        """Normalize a caller-provided filter.
+
+        Args:
+            value: Raw, controlled, mapping, or empty filter.
+            field_names: Field-name convention used by the caller.
+        """
         if not isinstance(value, Mapping):
             return value
         fields: Mapping[str, object] = value
@@ -501,6 +660,12 @@ class ListItemsResource:
     def _locally_filtered_pages(
         pages: Iterator[Page[ListItem]], expression: FilterExpression
     ) -> Iterator[Page[ListItem]]:
+        """Filter already downloaded pages locally.
+
+        Args:
+            pages: Parsed pages to filter.
+            expression: Controlled filter with a local predicate.
+        """
         for page in pages:
             yield Page(
                 items=[item for item in page.items if expression.matches(item.raw)],
@@ -517,6 +682,14 @@ class ListItemsResource:
         backoff_factor: float | None,
         sleep: Callable[[float], None] | None,
     ) -> builtins.list[BatchResponse]:
+        """Execute item subrequests with configured retry defaults.
+
+        Args:
+            requests: Ordered batch subrequests.
+            max_attempts: Optional attempt-budget override.
+            backoff_factor: Optional retry-factor override.
+            sleep: Optional wait-function override.
+        """
         attempts = (
             max_attempts
             if max_attempts is not None
@@ -543,12 +716,27 @@ class ListItemsResource:
 
     @staticmethod
     def _item_from_payload(payload: Any, *, fallback_id: str = "") -> ListItem:
+        """Validate and parse an item payload.
+
+        Args:
+            payload: Decoded Graph response.
+            fallback_id: ID used when the payload omits one.
+
+        Raises:
+            GraphInvalidResponseError: If the payload is not a mapping.
+        """
         if not isinstance(payload, Mapping):
             raise GraphInvalidResponseError("Microsoft Graph item response must be a JSON object")
         return ListItem.from_payload(payload, fallback_id=fallback_id)
 
     @classmethod
     def _created_item(cls, payload: Any, fields: Mapping[str, Any]) -> ListItem:
+        """Parse a create response with field fallbacks.
+
+        Args:
+            payload: Decoded Graph response or ``None``.
+            fields: Submitted field values.
+        """
         if payload is None:
             return ListItem(id="", fields=dict(fields), response_empty=True)
         item = cls._item_from_payload(payload)
@@ -558,6 +746,13 @@ class ListItemsResource:
     def _updated_item(
         cls, item_id: str, fields: Mapping[str, Any], payload: Any
     ) -> ListItem:
+        """Parse an update response with item and field fallbacks.
+
+        Args:
+            item_id: Updated item identifier.
+            fields: Submitted field values.
+            payload: Decoded Graph response or ``None``.
+        """
         if payload is None:
             return ListItem(
                 id=item_id,
@@ -582,6 +777,12 @@ class ListItemsResource:
 
     @staticmethod
     def _with_fallback_fields(item: ListItem, fields: Mapping[str, Any]) -> ListItem:
+        """Add submitted fields when Graph omits them.
+
+        Args:
+            item: Parsed list item.
+            fields: Submitted field values.
+        """
         if item.fields or not fields:
             return item
         return ListItem(
@@ -598,6 +799,12 @@ class ListItemsResource:
     def _create_batch_result(
         self, responses: Sequence[BatchResponse], records: Sequence[Mapping[str, Any]]
     ) -> BatchResult[ListItem]:
+        """Convert create subresponses into a batch result.
+
+        Args:
+            responses: Correlated raw batch responses.
+            records: Submitted create records.
+        """
         successes: builtins.list[ListItem] = []
         failures: builtins.list[GraphError] = []
         results: builtins.list[BatchItemResult[ListItem]] = []
@@ -624,6 +831,12 @@ class ListItemsResource:
         responses: Sequence[BatchResponse],
         updates: Sequence[tuple[str, Mapping[str, Any], str | None]],
     ) -> BatchResult[ListItem]:
+        """Convert update subresponses into a batch result.
+
+        Args:
+            responses: Correlated raw batch responses.
+            updates: Normalized update records.
+        """
         successes: builtins.list[ListItem] = []
         failures: builtins.list[GraphError] = []
         results: builtins.list[BatchItemResult[ListItem]] = []
@@ -650,6 +863,12 @@ class ListItemsResource:
         responses: Sequence[BatchResponse],
         deletes: Sequence[tuple[str, str | None]],
     ) -> BatchResult[str]:
+        """Convert delete subresponses into a batch result.
+
+        Args:
+            responses: Correlated raw batch responses.
+            deletes: Normalized delete records.
+        """
         successes: builtins.list[str] = []
         failures: builtins.list[GraphError] = []
         results: builtins.list[BatchItemResult[str]] = []
@@ -665,6 +884,12 @@ class ListItemsResource:
 
     @staticmethod
     def _success_result(response: BatchResponse, value: Any) -> BatchItemResult[Any]:
+        """Build one successful batch item result.
+
+        Args:
+            response: Correlated raw batch response.
+            value: Parsed successful value.
+        """
         return BatchItemResult(
             input_index=response.request.input_index or 0,
             request_id=response.request.id,
@@ -679,6 +904,12 @@ class ListItemsResource:
     def _failure_result(
         response: BatchResponse, error: GraphError
     ) -> BatchItemResult[Any]:
+        """Build one failed batch item result.
+
+        Args:
+            response: Correlated raw batch response.
+            error: Structured failure.
+        """
         return BatchItemResult(
             input_index=response.request.input_index or 0,
             request_id=response.request.id,
@@ -691,6 +922,12 @@ class ListItemsResource:
 
     @staticmethod
     def _invalid_batch_error(response: BatchResponse, message: str) -> GraphError:
+        """Build an error for an invalid successful subresponse.
+
+        Args:
+            response: Correlated raw batch response.
+            message: Validation failure message.
+        """
         return GraphError(
             code="invalidResponse",
             message=message,
@@ -705,6 +942,12 @@ class ListItemsResource:
     def _with_response_etag(
         cls, item: ListItem, headers: Mapping[str, Any]
     ) -> ListItem:
+        """Copy a response-header eTag onto an item when needed.
+
+        Args:
+            item: Parsed list item.
+            headers: Batch subresponse headers.
+        """
         if item.etag is not None:
             return item
         etag = cls._header(headers, "ETag")
@@ -725,6 +968,16 @@ class ListItemsResource:
     def _normalize_updates(
         updates: Sequence[Any], fields: Sequence[Mapping[str, Any]] | None
     ) -> builtins.list[tuple[str, Mapping[str, Any], str | None]]:
+        """Normalize accepted batch-update input shapes.
+
+        Args:
+            updates: Update records or item IDs.
+            fields: Optional parallel field mappings.
+
+        Raises:
+            ValueError: If lengths differ or an item ID is empty.
+            TypeError: If a record or field mapping is invalid.
+        """
         if fields is not None:
             if len(updates) != len(fields):
                 raise ValueError("update ids and fields must have the same length")
@@ -753,6 +1006,14 @@ class ListItemsResource:
     def _normalize_deletes(
         values: Sequence[Any] | str | int,
     ) -> builtins.list[tuple[str, str | None]]:
+        """Normalize accepted batch-delete input shapes.
+
+        Args:
+            values: Item IDs or records containing IDs and eTags.
+
+        Raises:
+            ValueError: If an item ID is empty.
+        """
         source: Sequence[Any] = [values] if isinstance(values, (str, int)) else values
         normalized: builtins.list[tuple[str, str | None]] = []
         for value in source:
@@ -777,6 +1038,16 @@ class ListItemsResource:
         index: int,
         item_id: str,
     ) -> str | None:
+        """Resolve an eTag override for one input.
+
+        Args:
+            etags: Scalar, sequence, mapping, or empty eTag configuration.
+            index: Position in the input sequence.
+            item_id: Graph list-item identifier.
+
+        Raises:
+            ValueError: If an eTag sequence is too short.
+        """
         if etags is None:
             return None
         if isinstance(etags, str):
@@ -789,6 +1060,12 @@ class ListItemsResource:
 
     @staticmethod
     def _header(headers: Mapping[str, Any], name: str) -> str | None:
+        """Read a header case-insensitively.
+
+        Args:
+            headers: Response header mapping.
+            name: Header name to retrieve.
+        """
         expected = name.casefold()
         for key, value in headers.items():
             if str(key).casefold() == expected:
@@ -797,10 +1074,23 @@ class ListItemsResource:
 
     @staticmethod
     def _optional_string(value: object) -> str | None:
+        """Convert a value to text while preserving ``None``.
+
+        Args:
+            value: Value to convert.
+        """
         return str(value) if value is not None else None
 
     @staticmethod
     def _delta_link(value: object) -> str | None:
+        """Validate an optional delta continuation link.
+
+        Args:
+            value: Link value returned by Graph.
+
+        Raises:
+            GraphInvalidResponseError: If a present link is invalid.
+        """
         if value is None:
             return None
         if not isinstance(value, str) or not value:

@@ -17,27 +17,41 @@ if TYPE_CHECKING:
 
 
 class VersionsResource:
-    """Read retained list item versions and restore one as the current state.
+    """Read and restore retained list-item versions.
 
-    Version availability and retention depend on SharePoint list configuration
-    and tenant policy. Restoring creates a new current version and does not
-    remove the existing version history.
+    Args:
+        client: Shared GraphBridge client.
+        sharepoint_list: Parent SharePoint list.
     """
 
     def __init__(
         self, client: GraphBridgeClient, sharepoint_list: SharePointListResource
     ) -> None:
+        """Initialize the versions resource.
+
+        Args:
+            client: Shared GraphBridge client.
+            sharepoint_list: Parent SharePoint list.
+        """
         self.client = client
         self.transport = client.transport
         self.sharepoint_list = sharepoint_list
 
     def list(self, item_id: str) -> Page[ListItemVersion]:
-        """Return the first page of versions retained for ``item_id``."""
+        """Return the first page of retained versions.
+
+        Args:
+            item_id: Graph list-item identifier.
+        """
 
         return next(self.iter_pages(item_id))
 
     def iter_pages(self, item_id: str) -> Iterator[Page[ListItemVersion]]:
-        """Lazily traverse version pages, preserving Graph nextLink values."""
+        """Lazily iterate through version pages.
+
+        Args:
+            item_id: Graph list-item identifier.
+        """
 
         return iter_pages(
             self.transport,
@@ -46,16 +60,33 @@ class VersionsResource:
         )
 
     def iter_all(self, item_id: str) -> Iterator[ListItemVersion]:
+        """Lazily iterate through all retained versions.
+
+        Args:
+            item_id: Graph list-item identifier.
+        """
         for page in self.iter_pages(item_id):
             yield from page.items
 
     def versions(self, item_id: str) -> builtins.list[ListItemVersion]:
-        """Return all retained versions for one list item."""
+        """Return all retained versions for one item.
+
+        Args:
+            item_id: Graph list-item identifier.
+        """
 
         return list(self.iter_all(item_id))
 
     def get(self, item_id: str, version_id: str) -> ListItemVersion:
-        """Return one retained list item version."""
+        """Retrieve one retained item version.
+
+        Args:
+            item_id: Graph list-item identifier.
+            version_id: Version identifier.
+
+        Raises:
+            ValueError: If either identifier is empty.
+        """
 
         self._validate_version_id(version_id)
         payload = self.transport.get(
@@ -64,7 +95,16 @@ class VersionsResource:
         return self._version_from_payload(payload)
 
     def restore_version(self, item_id: str, version_id: str) -> None:
-        """Restore a version with the stable ``restoreVersion`` action."""
+        """Restore a retained version as the current item state.
+
+        Args:
+            item_id: Graph list-item identifier.
+            version_id: Version identifier to restore.
+
+        Raises:
+            ValueError: If either identifier is empty.
+            GraphInvalidResponseError: If Graph returns a non-empty success body.
+        """
 
         self._validate_version_id(version_id)
         payload = self.transport.post(
@@ -76,6 +116,14 @@ class VersionsResource:
             )
 
     def _versions_path(self, item_id: str) -> str:
+        """Build the Graph path for an item's versions.
+
+        Args:
+            item_id: Graph list-item identifier.
+
+        Raises:
+            ValueError: If the identifier is empty.
+        """
         if not isinstance(item_id, str) or not item_id:
             raise ValueError("item_id cannot be empty")
         site_id = quote(self.sharepoint_list.site.id, safe=",")
@@ -87,11 +135,27 @@ class VersionsResource:
 
     @staticmethod
     def _validate_version_id(version_id: str) -> None:
+        """Validate a version identifier.
+
+        Args:
+            version_id: Version identifier to validate.
+
+        Raises:
+            ValueError: If the identifier is empty.
+        """
         if not isinstance(version_id, str) or not version_id:
             raise ValueError("version_id cannot be empty")
 
     @staticmethod
     def _version_from_payload(payload: Mapping[str, Any]) -> ListItemVersion:
+        """Validate and parse a version payload.
+
+        Args:
+            payload: Decoded Graph response.
+
+        Raises:
+            GraphInvalidResponseError: If the payload is invalid or lacks an ID.
+        """
         if not isinstance(payload, Mapping):
             raise GraphInvalidResponseError(
                 "Microsoft Graph list item version must be a JSON object"

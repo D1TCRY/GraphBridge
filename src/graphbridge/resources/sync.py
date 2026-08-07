@@ -31,11 +31,22 @@ FieldNameMode = Literal["internal", "display"]
 
 
 class SyncService:
-    """Build, review, apply and retry deterministic list synchronization plans."""
+    """Build, apply, and retry list synchronization plans.
+
+    Args:
+        client: Shared GraphBridge client.
+        sharepoint_list: Parent SharePoint list.
+    """
 
     def __init__(
         self, client: GraphBridgeClient, sharepoint_list: SharePointListResource
     ) -> None:
+        """Initialize the synchronization service.
+
+        Args:
+            client: Shared GraphBridge client.
+            sharepoint_list: Parent SharePoint list.
+        """
         self.client = client
         self.transport = client.transport
         self.sharepoint_list = sharepoint_list
@@ -50,11 +61,22 @@ class SyncService:
         dry_run: bool = False,
         field_names: FieldNameMode = "internal",
     ) -> SyncPlan:
-        """Read remote state once and return a mutation-free synchronization plan.
+        """Build a mutation-free synchronization plan.
 
-        Only source fields are compared. Extra SharePoint/system fields therefore
-        do not cause updates. ``prune=False`` retains remote-only items as
-        ``unchanged`` operations with an explicit reason.
+        Args:
+            rows: Source rows to compare with SharePoint.
+            key_field: Unique business-key field.
+            prune: Whether remote-only rows should be planned for deletion.
+            dry_run: Whether the resulting plan should avoid writes when applied.
+            field_names: Whether supplied names are internal or display names.
+
+        Returns:
+            A reviewable synchronization plan.
+
+        Raises:
+            SyncMissingKeyError: If a source or remote row lacks the key.
+            SyncDuplicateKeyError: If a key value is not unique.
+            SyncValidationError: If a key value is not hashable.
         """
 
         source = self._normalize_rows(rows)
@@ -112,12 +134,21 @@ class SyncService:
         backoff_factor: float | None = None,
         sleep: Callable[[float], None] | None = None,
     ) -> SyncResult:
-        """Apply a reviewed plan in create, PATCH-update, then prune order.
+        """Apply a reviewed synchronization plan.
 
-        A failed create defers every planned delete. This conservative barrier
-        prevents a prune from removing an item while a desired source item was
-        not successfully created. Batch subrequest retries are delegated to the
-        generic batch executor and never replay successful subrequests.
+        Args:
+            plan: Synchronization plan to apply.
+            dry_run: Optional override that prevents writes.
+            use_batch: Whether to use Graph batch requests.
+            max_attempts: Maximum attempts per transient subrequest.
+            backoff_factor: Base factor used for retry delays.
+            sleep: Optional function used to wait between retries.
+
+        Returns:
+            Aggregate and per-operation synchronization outcomes.
+
+        Raises:
+            TypeError: If the plan or dry-run option has an invalid type.
         """
 
         if not isinstance(plan, SyncPlan):
@@ -219,7 +250,15 @@ class SyncService:
         )
 
     def retry(self, result: SyncResult, **apply_options: Any) -> SyncResult:
-        """Retry only failed or safely deferred operations from ``result``."""
+        """Retry only failed or deferred operations.
+
+        Args:
+            result: Previous synchronization result.
+            **apply_options: Options forwarded to :meth:`apply`.
+
+        Raises:
+            TypeError: If result is not a synchronization result.
+        """
 
         if not isinstance(result, SyncResult):
             raise TypeError("result must be a SyncResult")
@@ -233,7 +272,18 @@ class SyncService:
         remote_items: Sequence[ListItem],
         prune: bool,
     ) -> SyncPlan:
-        """Build the legacy upload adapter plan without another remote read."""
+        """Build a legacy item-ID synchronization plan.
+
+        Args:
+            rows: Legacy source rows.
+            item_ids: Item IDs paired with source rows.
+            remote_items: Already retrieved remote items.
+            prune: Whether remote-only items should be deleted.
+
+        Raises:
+            ValueError: If source lengths differ.
+            SyncDuplicateKeyError: If an item ID is duplicated.
+        """
 
         if len(rows) != len(item_ids):
             raise ValueError("item_ids and rows must have the same length")
@@ -331,6 +381,16 @@ class SyncService:
         dry_run: bool,
         field_names: FieldNameMode,
     ) -> SyncPlan:
+        """Compare normalized source and remote rows by key.
+
+        Args:
+            source: Normalized source rows.
+            remote: Current SharePoint items.
+            key_field: Unique business-key field.
+            prune: Whether remote-only rows should be deleted.
+            dry_run: Whether applying the plan should avoid writes.
+            field_names: Field-name convention used by the plan.
+        """
         source_pairs = self._validate_source_keys(source, key_field)
         remote_pairs = self._validate_remote_keys(remote, key_field)
         source_duplicates = self._duplicates(
@@ -438,6 +498,15 @@ class SyncService:
         outcomes: list[SyncOperationResult],
         **batch_options: Any,
     ) -> None:
+        """Apply create operations in batches.
+
+        Args:
+            operations: Create operations to apply.
+            created: Destination for successful items.
+            failures: Destination for structured failures.
+            outcomes: Destination for correlated outcomes.
+            **batch_options: Options forwarded to batch execution.
+        """
         for operation_chunk in self._chunks(operations):
             try:
                 batch = self.items.create_many(
@@ -459,6 +528,15 @@ class SyncService:
         outcomes: list[SyncOperationResult],
         **batch_options: Any,
     ) -> None:
+        """Apply update operations in batches.
+
+        Args:
+            operations: Update operations to apply.
+            updated: Destination for successful items.
+            failures: Destination for structured failures.
+            outcomes: Destination for correlated outcomes.
+            **batch_options: Options forwarded to batch execution.
+        """
         for operation_chunk in self._chunks(operations):
             try:
                 batch = self.items.update_many(
@@ -483,6 +561,15 @@ class SyncService:
         outcomes: list[SyncOperationResult],
         **batch_options: Any,
     ) -> None:
+        """Apply delete operations in batches.
+
+        Args:
+            operations: Delete operations to apply.
+            deleted: Destination for deleted item IDs.
+            failures: Destination for structured failures.
+            outcomes: Destination for correlated outcomes.
+            **batch_options: Options forwarded to batch execution.
+        """
         for operation_chunk in self._chunks(operations):
             try:
                 batch = self.items.delete_many(
@@ -505,6 +592,16 @@ class SyncService:
         failures: list[GraphError],
         outcomes: list[SyncOperationResult],
     ) -> None:
+        """Apply create and update operations directly.
+
+        Args:
+            creates: Create operations to apply.
+            updates: Update operations to apply.
+            created: Destination for created items.
+            updated: Destination for updated items.
+            failures: Destination for structured failures.
+            outcomes: Destination for correlated outcomes.
+        """
         for operation in creates:
             try:
                 value = self.items.create(operation.fields)
@@ -536,6 +633,14 @@ class SyncService:
         failures: list[GraphError],
         outcomes: list[SyncOperationResult],
     ) -> None:
+        """Apply delete operations directly.
+
+        Args:
+            operations: Delete operations to apply.
+            deleted: Destination for deleted item IDs.
+            failures: Destination for structured failures.
+            outcomes: Destination for correlated outcomes.
+        """
         for operation in operations:
             assert operation.item_id is not None
             try:
@@ -560,6 +665,15 @@ class SyncService:
         failures: list[GraphError],
         outcomes: list[SyncOperationResult],
     ) -> None:
+        """Record correlated outcomes from one batch.
+
+        Args:
+            operations: Operations represented by the batch.
+            batch_results: Ordered batch item results.
+            successes: Destination for successful values.
+            failures: Destination for structured failures.
+            outcomes: Destination for correlated outcomes.
+        """
         for result in batch_results:
             operation = operations[result.input_index]
             if result.error is not None:
@@ -592,6 +706,14 @@ class SyncService:
         failures: list[GraphError],
         outcomes: list[SyncOperationResult],
     ) -> None:
+        """Record one phase-level exception for multiple operations.
+
+        Args:
+            operations: Operations affected by the exception.
+            caught: GraphBridge exception raised by the phase.
+            failures: Destination for structured failures.
+            outcomes: Destination for correlated outcomes.
+        """
         error = cls._graph_error(caught)
         for operation in operations:
             contextual = GraphError(
@@ -617,6 +739,11 @@ class SyncService:
 
     @staticmethod
     def _graph_error(caught: GraphBridgeError) -> GraphError:
+        """Convert a GraphBridge exception into a structured error.
+
+        Args:
+            caught: Exception to convert.
+        """
         if isinstance(caught, GraphRequestError):
             return caught.error
         candidate = getattr(caught, "error", None)
@@ -628,6 +755,15 @@ class SyncService:
     def _typed_operations(
         values: Sequence[object], expected: str
     ) -> list[SyncOperation]:
+        """Validate and return typed plan operations.
+
+        Args:
+            values: Plan entries to validate.
+            expected: Required operation kind.
+
+        Raises:
+            TypeError: If an entry has the wrong type or operation kind.
+        """
         operations: list[SyncOperation] = []
         for value in values:
             if not isinstance(value, SyncOperation) or value.operation != expected:
@@ -639,6 +775,14 @@ class SyncService:
     def _normalize_rows(
         rows: Iterable[Mapping[str, Any]],
     ) -> list[dict[str, Any]]:
+        """Materialize and validate source rows.
+
+        Args:
+            rows: Iterable of source mappings.
+
+        Raises:
+            TypeError: If rows is one mapping or contains non-mappings.
+        """
         if isinstance(rows, Mapping):
             raise TypeError("rows must be an iterable of mappings, not one mapping")
         try:
@@ -653,6 +797,16 @@ class SyncService:
     def _validate_source_keys(
         cls, rows: Sequence[Mapping[str, Any]], key_field: str
     ) -> list[tuple[Any, int]]:
+        """Validate source keys and return key/index pairs.
+
+        Args:
+            rows: Normalized source rows.
+            key_field: Required business-key field.
+
+        Raises:
+            SyncMissingKeyError: If a source row lacks a key.
+            SyncValidationError: If a key is not hashable.
+        """
         missing: list[str] = []
         pairs: list[tuple[Any, int]] = []
         for index, row in enumerate(rows):
@@ -670,6 +824,16 @@ class SyncService:
     def _validate_remote_keys(
         cls, items: Sequence[ListItem], key_field: str
     ) -> list[tuple[Any, int]]:
+        """Validate remote keys and return key/index pairs.
+
+        Args:
+            items: Remote SharePoint items.
+            key_field: Required business-key field.
+
+        Raises:
+            SyncMissingKeyError: If a remote item lacks a key.
+            SyncValidationError: If a key is not hashable.
+        """
         missing: list[str] = []
         pairs: list[tuple[Any, int]] = []
         for index, item in enumerate(items):
@@ -685,10 +849,25 @@ class SyncService:
 
     @staticmethod
     def _empty_key(value: Any) -> bool:
+        """Return whether a synchronization key is empty.
+
+        Args:
+            value: Key value to inspect.
+        """
         return value is None or value == ""
 
     @staticmethod
     def _ensure_hashable_key(key_field: str, value: Any, location: str) -> None:
+        """Ensure a synchronization key can be indexed.
+
+        Args:
+            key_field: Business-key field name.
+            value: Key value to validate.
+            location: Human-readable value location.
+
+        Raises:
+            SyncValidationError: If the value is not hashable.
+        """
         try:
             hash(value)
         except TypeError:
@@ -698,6 +877,11 @@ class SyncService:
 
     @staticmethod
     def _duplicates(values: Sequence[tuple[Any, str]]) -> dict[Any, list[str]]:
+        """Collect duplicate keys and their locations.
+
+        Args:
+            values: Key and location pairs.
+        """
         locations: dict[Any, list[str]] = {}
         for key, location in values:
             locations.setdefault(key, []).append(location)
@@ -707,6 +891,12 @@ class SyncService:
     def _differences(
         local: Mapping[str, Any], remote: Mapping[str, Any]
     ) -> list[SyncFieldDifference]:
+        """Compare source-owned fields with remote fields.
+
+        Args:
+            local: Desired source field values.
+            remote: Current remote field values.
+        """
         return [
             SyncFieldDifference(
                 field=str(name),
@@ -719,5 +909,10 @@ class SyncService:
 
     @staticmethod
     def _chunks(values: Sequence[SyncOperation]) -> Iterable[Sequence[SyncOperation]]:
+        """Split operations into Graph batch-sized chunks.
+
+        Args:
+            values: Ordered synchronization operations.
+        """
         for index in range(0, len(values), 20):
             yield values[index : index + 20]

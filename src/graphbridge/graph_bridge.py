@@ -13,12 +13,22 @@ from .models import ListInfo, ListItem, SiteInfo
 
 
 def _legacy_error_details(error: GraphAuthenticationError | GraphRequestError) -> str:
+    """Format a modern Graph error for a legacy result.
+
+    Args:
+        error: Authentication or request error to format.
+    """
     status_code = error.status_code
     response_text = error.response_text or str(error)
     return f"{status_code} {response_text}"
 
 
 def deduplicate_dicts(dict_list: list[dict]) -> list[dict]:
+    """Remove duplicate dictionaries while preserving order.
+
+    Args:
+        dict_list: Dictionaries to deduplicate.
+    """
     unique_items = []
     seen_keys = []
 
@@ -34,7 +44,22 @@ def deduplicate_dicts(dict_list: list[dict]) -> list[dict]:
 
 
 class GbAuth(object):
+    """Provide the legacy app-only authentication interface.
+
+    Args:
+        tenant_id: Microsoft Entra tenant identifier.
+        client_id: Application client identifier.
+        client_secret: Application client secret.
+    """
+
     def __init__(self, tenant_id: str, client_id: str, client_secret: str) -> None:
+        """Initialize legacy authentication settings.
+
+        Args:
+            tenant_id: Microsoft Entra tenant identifier.
+            client_id: Application client identifier.
+            client_secret: Application client secret.
+        """
         self.__auth_name = "GbAuth"
         self.__credential: ClientSecretCredential
         self.__token: str
@@ -50,9 +75,11 @@ class GbAuth(object):
         # self.headers
     
     def __str__(self) -> str:
+        """Return a readable representation with the secret redacted."""
         return f"< {self.__auth_name} | Tenant ID: {self.tenant_id}, Client ID: {self.client_id}, Client Secret: <redacted> >"
     
     def __repr__(self) -> str:
+        """Return a constructor-style representation with the secret redacted."""
         return (
             f"{self.__auth_name}(tenant_id={self.tenant_id!r}, client_id={self.client_id!r}, "
             "client_secret='<redacted>')"
@@ -60,9 +87,19 @@ class GbAuth(object):
     
     @property
     def tenant_id(self) -> str:
+        """Return the Microsoft Entra tenant identifier."""
         return self.__tenant_id
     @tenant_id.setter
     def tenant_id(self, value: str) -> None:
+        """Set the tenant identifier and clear authentication caches.
+
+        Args:
+            value: Non-empty tenant identifier.
+
+        Raises:
+            TypeError: If the value is not a string.
+            ValueError: If the value is empty.
+        """
         if not value:
             raise ValueError(f"<ERROR {self.__auth_name} | Tenant ID cannot be empty>")
         elif not isinstance(value, str):
@@ -72,9 +109,19 @@ class GbAuth(object):
     
     @property
     def client_id(self) -> str:
+        """Return the application client identifier."""
         return self.__client_id
     @client_id.setter
     def client_id(self, value) -> None:
+        """Set the client identifier and clear authentication caches.
+
+        Args:
+            value: Non-empty client identifier.
+
+        Raises:
+            TypeError: If the value is not a string.
+            ValueError: If the value is empty.
+        """
         if not value:
             raise ValueError(f"<ERROR {self.__auth_name} | Client ID cannot be empty>")
         elif not isinstance(value, str):
@@ -84,9 +131,19 @@ class GbAuth(object):
     
     @property
     def client_secret(self) -> str:
+        """Return the application client secret."""
         return self.__client_secret
     @client_secret.setter
     def client_secret(self, value: str) -> None:
+        """Set the client secret and clear authentication caches.
+
+        Args:
+            value: Non-empty application client secret.
+
+        Raises:
+            TypeError: If the value is not a string.
+            ValueError: If the value is empty.
+        """
         if not value:
             raise ValueError(f"<ERROR {self.__auth_name} | Client Secret cannot be empty>")
         elif not isinstance(value, str):
@@ -128,25 +185,52 @@ class GbAuth(object):
         return {'Authorization': f'Bearer {self.token}'}
 
     def _invalidate_auth_cache(self) -> None:
+        """Clear cached credential, token, and composed client values."""
         self.__dict__.pop("_GbAuth__credential", None)
         self.__dict__.pop("_GbAuth__token", None)
         self.__dict__.pop("_GbAuth__graph_client", None)
 
     def _get_graph_client(self) -> GraphBridgeClient:
+        """Return the cached composed GraphBridge client."""
         if "_GbAuth__graph_client" not in self.__dict__:
             self.__graph_client = GraphBridgeClient(credential=self.credential, max_retries=0)
         return self.__graph_client
 
     def _adopt_graph_client(self, client: GraphBridgeClient) -> None:
+        """Reuse an existing composed GraphBridge client.
+
+        Args:
+            client: Client to share with this legacy object.
+        """
         self.__graph_client = client
     
     
     
 
 class GbSite(GbAuth):
-    """Class to handle SharePoint site operations."""
+    """Provide the legacy SharePoint site interface.
+
+    Args:
+        *args: Positional authentication arguments used without ``gb_auth``.
+        hostname: SharePoint tenant hostname.
+        site_path: Server-relative site path.
+        gb_auth: Optional existing legacy authentication object.
+        **kwargs: Keyword authentication arguments used without ``gb_auth``.
+    """
     
     def __init__(self, *args, hostname: str, site_path: str, gb_auth: GbAuth | None = None, **kwargs) -> None:
+        """Initialize the legacy site interface.
+
+        Args:
+            *args: Positional authentication arguments used without ``gb_auth``.
+            hostname: SharePoint tenant hostname.
+            site_path: Server-relative site path.
+            gb_auth: Optional existing legacy authentication object.
+            **kwargs: Keyword authentication arguments used without ``gb_auth``.
+
+        Raises:
+            TypeError: If ``gb_auth`` is not a ``GbAuth`` instance.
+        """
         self.__site_name = "GbSite"
         self.__site_data: dict
         
@@ -165,6 +249,7 @@ class GbSite(GbAuth):
             self._adopt_graph_client(gb_auth._get_graph_client())
     
     def __str__(self) -> str:
+        """Return a readable representation of the site."""
         return f"< {self.__site_name} | Hostname: {self.hostname}, Site Path: {self.site_path}, Site ID: {self.site_id} >"
     
     @property
@@ -173,6 +258,15 @@ class GbSite(GbAuth):
         return self.__hostname
     @hostname.setter
     def hostname(self, value: str) -> None:
+        """Set the SharePoint hostname.
+
+        Args:
+            value: Non-empty SharePoint hostname.
+
+        Raises:
+            TypeError: If the value is not a string.
+            ValueError: If the value is empty.
+        """
         if not value:
             raise ValueError(f"<ERROR {self.__site_name} | Hostname cannot be empty>")
         elif not isinstance(value, str):
@@ -186,6 +280,15 @@ class GbSite(GbAuth):
         return self.__site_path
     @site_path.setter
     def site_path(self, value: str) -> None:
+        """Set the server-relative site path.
+
+        Args:
+            value: Non-empty site path.
+
+        Raises:
+            TypeError: If the value is not a string.
+            ValueError: If the value is empty.
+        """
         if not value:
             raise ValueError(f"<ERROR {self.__site_name} | Site path cannot be empty>")
         elif not isinstance(value, str):
@@ -222,9 +325,27 @@ class GbSite(GbAuth):
     
     
 class GbList(GbSite):
-    """Class to handle SharePoint list operations."""
+    """Provide the legacy SharePoint list interface.
+
+    Args:
+        *args: Positional site or authentication arguments used without ``gb_site``.
+        list_name: SharePoint list name or title.
+        gb_site: Optional existing legacy site object.
+        **kwargs: Keyword site or authentication arguments used without ``gb_site``.
+    """
     
     def __init__(self, *args, list_name: str, gb_site: GbSite | None = None, **kwargs) -> None:
+        """Initialize the legacy list interface.
+
+        Args:
+            *args: Positional site or authentication arguments used without ``gb_site``.
+            list_name: SharePoint list name or title.
+            gb_site: Optional existing legacy site object.
+            **kwargs: Keyword site or authentication arguments used without ``gb_site``.
+
+        Raises:
+            TypeError: If ``gb_site`` is not a ``GbSite`` instance.
+        """
         self.__list_obj_name = "GbList"
         self.__list_data: dict
         
@@ -241,9 +362,11 @@ class GbList(GbSite):
             self._adopt_graph_client(gb_site._get_graph_client())
     
     def __str__(self) -> str:
+        """Return a readable representation of the list."""
         return f"< {self.__list_obj_name} | list_name: {self.list_name}, list_id: {self.list_id} >"
     
     def __repr__(self) -> str:
+        """Return a safe constructor-style representation of the list."""
         return (
             f"{self.__list_obj_name}(list_name={self.list_name!r}, hostname={self.hostname!r}, "
             f"site_path={self.site_path!r}, tenant_id={self.tenant_id!r}, client_id={self.client_id!r}, "
@@ -321,7 +444,11 @@ class GbList(GbSite):
         return self.__decode_map
     
     def decode_row(self, row: dict) -> dict:
-        """Decodes the keys of a row dictionary using the decode_map."""
+        """Decode legacy SharePoint field names in a row.
+
+        Args:
+            row: Field mapping whose keys should be decoded.
+        """
         
         decoded_row = {}
         for k, v in row.items():
@@ -333,7 +460,11 @@ class GbList(GbSite):
         return decoded_row
     
     def encode_row(self, row: dict) -> dict:
-        """Encodes the keys of a row dictionary using the encode_map."""
+        """Encode field names with the legacy character map.
+
+        Args:
+            row: Field mapping whose keys should be encoded.
+        """
         
         encoded_row = {}
         for k, v in row.items():
@@ -350,6 +481,15 @@ class GbList(GbSite):
         return self.__list_name
     @list_name.setter
     def list_name(self, value: str) -> None:
+        """Set the SharePoint list name.
+
+        Args:
+            value: Non-empty list name or title.
+
+        Raises:
+            TypeError: If the value is not a string.
+            ValueError: If the value is empty.
+        """
         if not value:
             raise ValueError(f"<ERROR {self.__list_obj_name} | Name cannot be empty>")
         elif not isinstance(value, str):
@@ -385,6 +525,14 @@ class GbList(GbSite):
     
     @property
     def list_items_all(self, top: int = 200) -> list[dict]:
+        """Return all list items across every page.
+
+        Args:
+            top: Requested page size for the initial Graph call.
+
+        Raises:
+            RuntimeError: If authentication or the Graph request fails.
+        """
         url = f"{self.list_url}/items?expand=fields&$top={top}"
         items: list[dict] = []
         while url:
@@ -646,13 +794,17 @@ class GbList(GbSite):
     
     
     def upload(self, ids: str | int | list[str | int] | tuple[str | int] | set[str | int], rows: dict | list[dict] | tuple[dict], force: bool = False, delete: bool = False) -> dict[str, Any]:
-        """Deprecated adapter over :meth:`sync.plan` and :meth:`sync.apply`.
+        """Apply the deprecated legacy upload workflow.
 
-        The signature and result sections are retained. ``force=True`` no longer
-        performs delete-and-recreate: existing items are safely patched and are
-        reported in the legacy ``replaced`` section. ``delete=True`` maps to the
-        explicit ``prune=True`` plan option, and prune runs only after successful
-        creates.
+        Args:
+            ids: Source item identifiers paired with rows.
+            rows: Source field mappings.
+            force: Whether updates appear in the legacy ``replaced`` section.
+            delete: Whether remote-only items should be pruned.
+
+        Raises:
+            TypeError: If an input has an unsupported type.
+            ValueError: If identifier and row counts differ.
         """
 
         warnings.warn(
@@ -788,6 +940,11 @@ class GbList(GbSite):
 
     @staticmethod
     def _legacy_sync_error(error: object) -> str:
+        """Format a synchronization error for legacy output.
+
+        Args:
+            error: Structured error or arbitrary failure value.
+        """
         if error is None:
             return "Synchronization operation failed"
         status = getattr(error, "status_code", None)
@@ -796,15 +953,25 @@ class GbList(GbSite):
 
 
     def create_many(self, rows: list[dict], batch_size: int = 20) -> dict:
-        """
-        Crea più elementi in una lista SharePoint usando Microsoft Graph $batch.
-        rows: elenco di dict con le colonne della lista (Title, ecc.)
-        Ritorna un dict con successes/failures (come le tue altre API).
+        """Create multiple items with the legacy batch interface.
+
+        Args:
+            rows: Field mappings for the items to create.
+            batch_size: Maximum number of items per batch request.
+
+        Raises:
+            TypeError: If rows is not a list of dictionaries.
         """
         if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
             raise TypeError("rows deve essere una lista di dict")
 
         def chunked(seq, size):
+            """Split a sequence into fixed-size chunks.
+
+            Args:
+                seq: Sequence to split.
+                size: Maximum values per chunk.
+            """
             for i in range(0, len(seq), size):
                 yield seq[i:i+size]
 
@@ -853,10 +1020,15 @@ class GbList(GbSite):
 
 
     def delete_many(self, ids, batch_size: int = 20, if_match: str | None = None) -> dict:
-        """
-        Cancella più elementi della lista SharePoint usando Graph $batch.
-        ids: singolo id o lista/iterabile di id (list item id, non driveItem id).
-        if_match: opzionale; es. '*' oppure l'eTag specifico per controllo concorrenza.
+        """Delete multiple items with the legacy batch interface.
+
+        Args:
+            ids: One item ID or an iterable of item IDs.
+            batch_size: Maximum number of items per batch request.
+            if_match: Optional eTag sent with each delete.
+
+        Raises:
+            TypeError: If IDs cannot be normalized to a list.
         """
         # normalizza gli id
         if isinstance(ids, (str, int)):
@@ -868,6 +1040,12 @@ class GbList(GbSite):
                 raise TypeError("ids deve essere stringa, intero o iterabile di valori")
 
         def chunked(seq, size):
+            """Split a sequence into fixed-size chunks.
+
+            Args:
+                seq: Sequence to split.
+                size: Maximum values per chunk.
+            """
             for i in range(0, len(seq), size):
                 yield seq[i:i+size]
 
