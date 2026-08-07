@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 class ColumnsResource:
     """Read and mutate SharePoint column definitions.
 
+    Besides column CRUD, this resource owns the authoritative mapping between
+    user-facing display names and SharePoint internal field names.
+
     Args:
         client: Shared GraphBridge client.
         sharepoint_list: Parent SharePoint list.
@@ -46,6 +49,9 @@ class ColumnsResource:
     ) -> Page[ColumnInfo]:
         """Return the first page of columns.
 
+        This convenience method is suitable when only the initial Graph page is
+        needed; complete schema discovery should use the lazy iterators.
+
         Args:
             select: Optional column properties to return.
             top: Optional maximum page size.
@@ -61,6 +67,9 @@ class ColumnsResource:
         orderby: Sequence[str] | None = None,
     ) -> Iterator[Page[ColumnInfo]]:
         """Lazily iterate through column pages.
+
+        Selection, ordering, and page-size options are validated through the
+        shared OData query builder before the first request.
 
         Args:
             select: Optional column properties to return.
@@ -88,6 +97,9 @@ class ColumnsResource:
     ) -> Iterator[ColumnInfo]:
         """Lazily iterate through all columns.
 
+        Parsed definitions are yielded one at a time without eagerly materializing
+        the entire schema.
+
         Args:
             select: Optional column properties to return.
             top: Optional maximum page size.
@@ -99,6 +111,8 @@ class ColumnsResource:
     def get(self, column_id: str) -> ColumnInfo:
         """Retrieve a column by ID.
 
+        This compatibility alias delegates directly to :meth:`get_by_id`.
+
         Args:
             column_id: Graph column identifier.
         """
@@ -107,6 +121,9 @@ class ColumnsResource:
 
     def get_by_id(self, column_id: str) -> ColumnInfo:
         """Retrieve a column by its Graph ID.
+
+        The response must be a JSON object containing an ID; malformed successful
+        responses fail explicitly.
 
         Args:
             column_id: Graph column identifier.
@@ -121,6 +138,9 @@ class ColumnsResource:
 
     def get_by_name(self, name: str, *, include_display_name: bool = True) -> ColumnInfo:
         """Resolve a column by internal or display name.
+
+        Internal-name matches take precedence. Display names are used only as an
+        optional fallback and ambiguous matches are never selected arbitrarily.
 
         Args:
             name: Internal or display column name.
@@ -153,6 +173,9 @@ class ColumnsResource:
     def create(self, definition: Mapping[str, Any]) -> ColumnInfo:
         """Create one SharePoint column definition.
 
+        The mapping is forwarded without stripping unknown stable properties, and
+        a successful mutation invalidates the cached schema.
+
         Args:
             definition: Graph column definition payload.
 
@@ -173,6 +196,9 @@ class ColumnsResource:
         changes: Mapping[str, Any],
     ) -> ColumnInfo:
         """Update mutable properties of a column.
+
+        The immutable ID cannot appear in the changes. After Graph accepts the
+        update, the display-name mapping cache is cleared.
 
         Args:
             column_id: Graph column identifier.
@@ -197,6 +223,9 @@ class ColumnsResource:
     def delete(self, column_id: str) -> None:
         """Delete a SharePoint column.
 
+        Graph must return an empty success response; the local schema cache is
+        invalidated only after that contract is satisfied.
+
         Args:
             column_id: Graph column identifier.
 
@@ -213,6 +242,9 @@ class ColumnsResource:
 
     def display_name_map(self, *, refresh: bool = False) -> dict[str, str]:
         """Return the display-to-internal-name mapping.
+
+        The complete schema is cached to avoid repeated enumeration, while
+        duplicate display names are rejected because translation would be unsafe.
 
         Args:
             refresh: Whether to reload the schema before mapping.
@@ -238,7 +270,10 @@ class ColumnsResource:
 
     @property
     def name_map(self) -> dict[str, str]:
-        """Return the cached display-to-internal-name mapping."""
+        """Return the cached display-to-internal-name mapping.
+
+        Accessing the property loads the schema only when the cache is empty.
+        """
 
         return self.display_name_map()
 
@@ -246,6 +281,9 @@ class ColumnsResource:
         self, fields: Mapping[str, Any], *, strict: bool = True
     ) -> dict[str, Any]:
         """Translate display names to internal field names.
+
+        Keys that are already valid internal names pass through unchanged. Strict
+        mode rejects unknown names instead of guessing their encoded form.
 
         Args:
             fields: Field values keyed by display or internal name.
@@ -272,6 +310,9 @@ class ColumnsResource:
     def to_display_fields(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         """Translate known internal names to display names.
 
+        Unknown internal fields are preserved, which allows system or future Graph
+        fields to remain visible to callers.
+
         Args:
             fields: Field values keyed by internal name.
         """
@@ -280,7 +321,10 @@ class ColumnsResource:
         return {reverse.get(name, name): value for name, value in fields.items()}
 
     def invalidate_schema(self) -> None:
-        """Clear the cached column schema."""
+        """Clear the cached column schema.
+
+        The next mapping or schema lookup will enumerate columns again from Graph.
+        """
         self._schema_cache = None
 
     @property

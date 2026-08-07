@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 class SitesResource:
     """Resolve and bind SharePoint sites.
 
+    This collection resource is the first navigation point below the client and
+    creates :class:`SiteResource` objects that share the client's transport.
+
     Args:
         client: Shared GraphBridge client.
     """
@@ -32,6 +35,9 @@ class SitesResource:
 
     def get_by_path(self, *, hostname: str, path: str) -> SiteResource:
         """Resolve a SharePoint site by hostname and path.
+
+        The path is URL-quoted as one Graph site-path expression, and the returned
+        metadata is validated before a resource is bound.
 
         Args:
             hostname: SharePoint tenant hostname.
@@ -51,6 +57,9 @@ class SitesResource:
     def get(self, site_id: str) -> SiteResource:
         """Retrieve a SharePoint site by Graph ID.
 
+        ID lookup avoids a path-resolution dependency and is preferred when the
+        immutable Graph identifier is already known.
+
         Args:
             site_id: Graph site identifier.
 
@@ -64,6 +73,9 @@ class SitesResource:
 
     def bind(self, site: SiteInfo | Mapping[str, Any]) -> SiteResource:
         """Bind known site metadata without an HTTP request.
+
+        This is useful when trusted metadata was obtained earlier and callers
+        want to compose list resources without repeating site discovery.
 
         Args:
             site: Existing site model or payload.
@@ -80,6 +92,9 @@ class SitesResource:
 
 class SiteResource:
     """Represent one SharePoint site and its lists.
+
+    The object retains parsed site metadata and immediately exposes a composed
+    ``lists`` resource backed by the same client and transport.
 
     Args:
         client: Shared GraphBridge client.
@@ -115,7 +130,10 @@ class SiteResource:
 
     @property
     def id(self) -> str:
-        """Return the Graph site identifier."""
+        """Return the Graph site identifier.
+
+        This immutable compound value scopes all list operations below the site.
+        """
         return self.info.id
 
     def __repr__(self) -> str:

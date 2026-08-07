@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 class VersionsResource:
     """Read and restore retained list-item versions.
 
+    Version availability depends on SharePoint list configuration and retention
+    policy. Restore uses the stable action and does not erase existing history.
+
     Args:
         client: Shared GraphBridge client.
         sharepoint_list: Parent SharePoint list.
@@ -40,6 +43,8 @@ class VersionsResource:
     def list(self, item_id: str) -> Page[ListItemVersion]:
         """Return the first page of retained versions.
 
+        Use the lazy iterators when version history may span multiple Graph pages.
+
         Args:
             item_id: Graph list-item identifier.
         """
@@ -48,6 +53,9 @@ class VersionsResource:
 
     def iter_pages(self, item_id: str) -> Iterator[Page[ListItemVersion]]:
         """Lazily iterate through version pages.
+
+        Continuation links are handled by the shared pagination helper and are
+        forwarded unchanged through the safe transport.
 
         Args:
             item_id: Graph list-item identifier.
@@ -62,6 +70,9 @@ class VersionsResource:
     def iter_all(self, item_id: str) -> Iterator[ListItemVersion]:
         """Lazily iterate through all retained versions.
 
+        Individual parsed versions are yielded without loading the complete
+        history into memory first.
+
         Args:
             item_id: Graph list-item identifier.
         """
@@ -71,6 +82,9 @@ class VersionsResource:
     def versions(self, item_id: str) -> builtins.list[ListItemVersion]:
         """Return all retained versions for one item.
 
+        This convenience method materializes the lazy version iterator into a
+        list for callers that need the complete history at once.
+
         Args:
             item_id: Graph list-item identifier.
         """
@@ -79,6 +93,9 @@ class VersionsResource:
 
     def get(self, item_id: str, version_id: str) -> ListItemVersion:
         """Retrieve one retained item version.
+
+        Both item and version identifiers are quoted as independent Graph path
+        segments before the response is validated and parsed.
 
         Args:
             item_id: Graph list-item identifier.
@@ -96,6 +113,9 @@ class VersionsResource:
 
     def restore_version(self, item_id: str, version_id: str) -> None:
         """Restore a retained version as the current item state.
+
+        The stable Graph action creates a new current version while retaining the
+        prior history, and a successful response must be empty.
 
         Args:
             item_id: Graph list-item identifier.

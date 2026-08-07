@@ -8,11 +8,18 @@ from .models import GraphError
 
 
 class GraphBridgeError(Exception):
-    """Base class for GraphBridge errors."""
+    """Base class for errors raised by the composed GraphBridge API.
+
+    Catching this type handles library-specific failures without also catching
+    unrelated application exceptions.
+    """
 
 
 class GraphAuthenticationError(GraphBridgeError):
     """Report a token acquisition failure or HTTP 401 response.
+
+    The exception keeps only redacted response details and may carry the
+    structured Graph error when the failure originated from an HTTP response.
 
     Args:
         message: Safe error message.
@@ -31,6 +38,9 @@ class GraphAuthenticationError(GraphBridgeError):
     ) -> None:
         """Initialize an authentication error.
 
+        Response details are stored for compatibility with the legacy adapter,
+        while the main exception message remains safe for logs.
+
         Args:
             message: Safe error message.
             status_code: Optional HTTP status code.
@@ -44,15 +54,26 @@ class GraphAuthenticationError(GraphBridgeError):
 
 
 class GraphNetworkError(GraphBridgeError):
-    """The HTTP request could not be completed."""
+    """Report a request that could not be completed at the network layer.
+
+    This is raised only after the configured retry budget, when applicable, has
+    been exhausted.
+    """
 
 
 class GraphInvalidResponseError(GraphBridgeError):
-    """Microsoft Graph returned a response with an unexpected shape."""
+    """Report a Microsoft Graph response with an unexpected shape.
+
+    GraphBridge raises this instead of guessing when required JSON properties,
+    collection entries, or continuation links are malformed.
+    """
 
 
 class GraphAmbiguousMatchError(GraphBridgeError):
     """Report a name that matched multiple Graph resources.
+
+    Candidate identifiers are retained so the caller can choose an immutable ID
+    rather than allowing GraphBridge to select an arbitrary match.
 
     Args:
         resource: Type of resource being resolved.
@@ -76,11 +97,18 @@ class GraphAmbiguousMatchError(GraphBridgeError):
 
 
 class GraphUnsupportedOperationError(GraphBridgeError):
-    """The requested operation is not available on Microsoft Graph v1.0."""
+    """Report an operation unavailable on stable Microsoft Graph v1.0.
+
+    The library does not silently substitute beta endpoints or emulate a
+    capability whose stable semantics are unavailable.
+    """
 
 
 class GraphRequestError(GraphBridgeError):
-    """Represent a structured non-success Graph response.
+    """Represent a structured non-success Microsoft Graph response.
+
+    The original status, safe response text, headers, and retry information are
+    preserved when available for diagnostics and caller policy decisions.
 
     Args:
         error: Structured Microsoft Graph error.
@@ -114,35 +142,66 @@ class GraphRequestError(GraphBridgeError):
 
 
 class GraphPermissionError(GraphRequestError):
-    """Microsoft Graph returned HTTP 403."""
+    """Report HTTP 403 when Graph rejects the caller's authorization.
+
+    This generally indicates missing application permissions or a missing
+    resource assignment for a Selected permission.
+    """
 
 
 class GraphNotFoundError(GraphRequestError):
-    """Microsoft Graph returned HTTP 404."""
+    """Report HTTP 404 when a requested Graph resource does not exist.
+
+    It is also used by explicit name-resolution helpers when enumeration finds
+    no exact match.
+    """
 
 
 class GraphConflictError(GraphRequestError):
-    """Microsoft Graph returned HTTP 409."""
+    """Report HTTP 409 when a Graph operation conflicts with current state.
+
+    Callers should inspect the structured error before deciding whether to retry
+    or revise the requested mutation.
+    """
 
 
 class GraphGoneError(GraphRequestError):
-    """Microsoft Graph returned HTTP 410."""
+    """Report a generic HTTP 410 response from Microsoft Graph.
+
+    Recognized expired delta cursors are converted to the more specific
+    :class:`DeltaResetRequiredError` by the delta resource.
+    """
 
 
 class GraphPreconditionFailedError(GraphRequestError):
-    """An eTag or another precondition failed with HTTP 412."""
+    """Report an eTag or other precondition failure returned as HTTP 412.
+
+    The exception keeps concurrency conflicts visible so callers can re-read or
+    re-plan instead of silently overwriting newer remote state.
+    """
 
 
 class GraphThrottlingError(GraphRequestError):
-    """Microsoft Graph throttled the request with HTTP 429."""
+    """Report that Microsoft Graph throttled a request with HTTP 429.
+
+    When available, the parsed ``Retry-After`` value is stored on the inherited
+    request-error attributes.
+    """
 
 
 class GraphServerError(GraphRequestError):
-    """Microsoft Graph returned an HTTP 5xx response."""
+    """Report an HTTP 5xx failure returned by Microsoft Graph.
+
+    Safe methods may already have been retried by the transport before this
+    exception reaches the caller.
+    """
 
 
 class DeltaResetRequiredError(GraphBridgeError):
     """Report an expired delta cursor that requires resynchronization.
+
+    GraphBridge exposes the server strategy and restart link but deliberately
+    leaves full-state reconciliation to the application.
 
     Args:
         error: Structured HTTP 410 Graph error.
@@ -175,11 +234,18 @@ class DeltaResetRequiredError(GraphBridgeError):
 
 
 class SyncValidationError(GraphBridgeError, ValueError):
-    """A synchronization source or remote key set is unsafe to plan."""
+    """Report synchronization input that is unsafe to plan or apply.
+
+    This validation family prevents ambiguous matching before any mutation is
+    attempted.
+    """
 
 
 class SyncMissingKeyError(SyncValidationError):
     """Report rows that do not contain the synchronization key.
+
+    Every source and remote row needs a non-empty key so planning can establish a
+    deterministic one-to-one match.
 
     Args:
         key_field: Field used as the synchronization key.
@@ -202,6 +268,9 @@ class SyncMissingKeyError(SyncValidationError):
 
 class SyncDuplicateKeyError(SyncValidationError):
     """Report synchronization keys that are not unique.
+
+    Duplicate values are grouped with their source or remote locations to make
+    the unsafe records straightforward to identify.
 
     Args:
         key_field: Field used as the synchronization key.

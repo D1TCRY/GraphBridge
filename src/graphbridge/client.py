@@ -21,6 +21,9 @@ from .transport import (
 class GraphBridgeClient:
     """Provide the composed entry point to GraphBridge resources.
 
+    A client owns one transport and exposes site navigation through ``sites``.
+    Every bound resource created from it reuses the same session and credential.
+
     Args:
         credential: Credential used when constructing a transport.
         transport: Optional preconfigured transport.
@@ -51,6 +54,9 @@ class GraphBridgeClient:
         scope: str = GRAPH_SCOPE,
     ) -> None:
         """Initialize the client and its shared transport.
+
+        Callers may inject a complete transport or let the client construct one
+        from a credential, but those two construction modes cannot be mixed.
 
         Args:
             credential: Credential used when no transport is supplied.
@@ -91,15 +97,24 @@ class GraphBridgeClient:
         self.sites = SitesResource(self)
 
     def close(self) -> None:
-        """Close the shared HTTP transport."""
+        """Close the shared HTTP transport.
+
+        This releases the reusable HTTP session and should be called when the
+        client is no longer needed.
+        """
         self.transport.close()
 
     def __enter__(self) -> GraphBridgeClient:
-        """Return the client when entering a context manager."""
+        """Return the client when entering a context manager.
+
+        Context-manager use provides deterministic cleanup of the HTTP session.
+        """
         return self
 
     def __exit__(self, *_args: object) -> None:
         """Close the client when leaving a context manager.
+
+        Cleanup occurs whether the managed block succeeds or raises an exception.
 
         Args:
             *_args: Context-manager exception details, if any.
@@ -107,5 +122,9 @@ class GraphBridgeClient:
         self.close()
 
     def __repr__(self) -> str:
-        """Return a safe representation of the client."""
+        """Return a safe representation of the client.
+
+        Authentication material is omitted; only the transport's safe summary is
+        included.
+        """
         return f"GraphBridgeClient(transport={self.transport!r})"

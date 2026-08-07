@@ -35,6 +35,9 @@ FilterMode = Literal["server", "local"]
 class ListItemsResource:
     """Read and mutate SharePoint list items.
 
+    The resource combines typed CRUD, controlled queries, lazy pagination, delta
+    traversal, version shortcuts, field-name translation, and batch helpers.
+
     Args:
         client: Shared GraphBridge client.
         sharepoint_list: Parent SharePoint list.
@@ -62,6 +65,9 @@ class ListItemsResource:
         field_names: FieldNameMode = "internal",
     ) -> Page[ListItem]:
         """Return the first page of list items.
+
+        Server-side filtering is the default. Local filtering must be requested
+        explicitly and is evaluated once against each downloaded page.
 
         Args:
             fields: Optional SharePoint fields to expand.
@@ -94,6 +100,9 @@ class ListItemsResource:
         field_names: FieldNameMode = "internal",
     ) -> Iterator[Page[ListItem]]:
         """Lazily iterate through list-item pages.
+
+        The first request is delayed until iteration, and subsequent Graph links
+        are forwarded exactly without rebuilding the original query.
 
         Args:
             fields: Optional SharePoint fields to expand.
@@ -142,6 +151,9 @@ class ListItemsResource:
     ) -> Iterator[ListItem]:
         """Lazily iterate through all matching list items.
 
+        This flattens page results while retaining lazy retrieval, making it
+        suitable for collections that should not be loaded into memory at once.
+
         Args:
             fields: Optional SharePoint fields to expand.
             filter: Optional raw, controlled, or mapping filter.
@@ -170,6 +182,9 @@ class ListItemsResource:
     ) -> ListItem:
         """Retrieve one SharePoint list item.
 
+        Requested fields are expanded in the same call and the response is parsed
+        into a model that preserves both convenient fields and raw metadata.
+
         Args:
             item_id: Graph list-item identifier.
             fields: Optional SharePoint fields to expand.
@@ -195,6 +210,9 @@ class ListItemsResource:
     ) -> ListItem:
         """Create one SharePoint list item.
 
+        Display-name mode resolves the list schema before writing. Empty Graph
+        successes are represented explicitly rather than confused with empty JSON.
+
         Args:
             fields: Field values for the new item.
             field_names: Whether supplied field names are internal or display names.
@@ -215,6 +233,9 @@ class ListItemsResource:
         field_names: FieldNameMode = "internal",
     ) -> ListItem:
         """Update fields on one SharePoint list item.
+
+        The stable endpoint patches the item's ``fields`` facet. Supplying an eTag
+        enables optimistic concurrency and exposes stale writes as HTTP 412.
 
         Args:
             item_id: Graph list-item identifier.
@@ -239,6 +260,9 @@ class ListItemsResource:
 
     def delete(self, item_id: str, *, etag: str | None = None) -> None:
         """Delete one SharePoint list item.
+
+        An optional eTag can protect against deleting a remotely changed item, and
+        a successful response is required to have no JSON body.
 
         Args:
             item_id: Graph list-item identifier.
@@ -271,6 +295,10 @@ class ListItemsResource:
         field_names: FieldNameMode = "internal",
     ) -> DeltaResult:
         """Traverse one complete list-item delta round.
+
+        Every continuation page is consumed and the final opaque delta link is
+        returned unchanged. The last occurrence of an item in the round wins.
+        Without ``known_ids``, non-deleted changes remain explicitly unclassified.
 
         Args:
             link: Optional opaque continuation or delta link.
@@ -409,6 +437,9 @@ class ListItemsResource:
     def versions(self, item_id: str) -> builtins.list[ListItemVersion]:
         """Return every retained version of one item.
 
+        This convenience method delegates to the list's version resource and
+        materializes all paginated version entries.
+
         Args:
             item_id: Graph list-item identifier.
         """
@@ -417,6 +448,9 @@ class ListItemsResource:
 
     def restore_version(self, item_id: str, version_id: str) -> None:
         """Restore a retained version as the current state.
+
+        SharePoint creates a new current version while retaining the existing
+        history; GraphBridge does not replace or remove historical entries.
 
         Args:
             item_id: Graph list-item identifier.
@@ -435,6 +469,9 @@ class ListItemsResource:
         field_names: FieldNameMode = "internal",
     ) -> BatchResult[ListItem]:
         """Create multiple list items with Graph batches.
+
+        Records are assigned deterministic input IDs, divided into groups of at
+        most twenty, and correlated back into ordered per-input outcomes.
 
         Args:
             records: Ordered field mappings to create.
@@ -478,6 +515,10 @@ class ListItemsResource:
         field_names: FieldNameMode = "internal",
     ) -> BatchResult[ListItem]:
         """Update multiple list items with Graph batches.
+
+        Several convenient input shapes are normalized to item ID, fields, and
+        optional eTag triples before batching. Each subrequest reports its own
+        success, failure, and attempt count.
 
         Args:
             updates: Update records or a parallel sequence of item IDs.
@@ -541,6 +582,9 @@ class ListItemsResource:
     ) -> BatchResult[str]:
         """Delete multiple items with Graph batches.
 
+        Scalar or per-item eTags can be attached to conditional deletes, and
+        partial failures remain correlated with the original identifiers.
+
         Args:
             item_ids: Item IDs or records containing IDs and optional eTags.
             etag: Optional eTag applied to every delete.
@@ -592,6 +636,9 @@ class ListItemsResource:
         self, fields: Sequence[str] | None, *, field_names: FieldNameMode
     ) -> Sequence[str] | None:
         """Translate selected field names when display mode is used.
+
+        The cached column schema is authoritative; unknown display names fail
+        rather than falling back to the legacy character encoder.
 
         Args:
             fields: Optional field names to translate.
@@ -683,6 +730,9 @@ class ListItemsResource:
         sleep: Callable[[float], None] | None,
     ) -> builtins.list[BatchResponse]:
         """Execute item subrequests with configured retry defaults.
+
+        Explicit options override transport settings, while omitted values inherit
+        its attempt budget, backoff factor, delay cap, and sleep function.
 
         Args:
             requests: Ordered batch subrequests.
@@ -969,6 +1019,9 @@ class ListItemsResource:
         updates: Sequence[Any], fields: Sequence[Mapping[str, Any]] | None
     ) -> builtins.list[tuple[str, Mapping[str, Any], str | None]]:
         """Normalize accepted batch-update input shapes.
+
+        Parallel ID/field sequences, tuples, and mappings are converted to one
+        consistent representation before request URLs and headers are created.
 
         Args:
             updates: Update records or item IDs.

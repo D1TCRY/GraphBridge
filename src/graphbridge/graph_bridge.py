@@ -26,6 +26,9 @@ def _legacy_error_details(error: GraphAuthenticationError | GraphRequestError) -
 def deduplicate_dicts(dict_list: list[dict]) -> list[dict]:
     """Remove duplicate dictionaries while preserving order.
 
+    Dictionaries are compared through a stable JSON representation, so the first
+    occurrence of each equivalent mapping is retained.
+
     Args:
         dict_list: Dictionaries to deduplicate.
     """
@@ -46,6 +49,9 @@ def deduplicate_dicts(dict_list: list[dict]) -> list[dict]:
 class GbAuth(object):
     """Provide the legacy app-only authentication interface.
 
+    This compatibility class retains lazy cached credentials and tokens expected
+    by existing users while its HTTP operations can share the composed client.
+
     Args:
         tenant_id: Microsoft Entra tenant identifier.
         client_id: Application client identifier.
@@ -54,6 +60,9 @@ class GbAuth(object):
 
     def __init__(self, tenant_id: str, client_id: str, client_secret: str) -> None:
         """Initialize legacy authentication settings.
+
+        Values are validated through their property setters. Credential creation
+        and token acquisition remain lazy until an authenticated operation occurs.
 
         Args:
             tenant_id: Microsoft Entra tenant identifier.
@@ -87,11 +96,16 @@ class GbAuth(object):
     
     @property
     def tenant_id(self) -> str:
-        """Return the Microsoft Entra tenant identifier."""
+        """Return the Microsoft Entra tenant identifier.
+
+        The value is used when the legacy credential is created lazily.
+        """
         return self.__tenant_id
     @tenant_id.setter
     def tenant_id(self, value: str) -> None:
         """Set the tenant identifier and clear authentication caches.
+
+        Invalidating cached state ensures future tokens use the new tenant.
 
         Args:
             value: Non-empty tenant identifier.
@@ -109,11 +123,16 @@ class GbAuth(object):
     
     @property
     def client_id(self) -> str:
-        """Return the application client identifier."""
+        """Return the application client identifier.
+
+        The value identifies the Entra application used for app-only access.
+        """
         return self.__client_id
     @client_id.setter
     def client_id(self, value) -> None:
         """Set the client identifier and clear authentication caches.
+
+        Future credential and token access will use the replacement value.
 
         Args:
             value: Non-empty client identifier.
@@ -131,11 +150,16 @@ class GbAuth(object):
     
     @property
     def client_secret(self) -> str:
-        """Return the application client secret."""
+        """Return the application client secret.
+
+        String representations deliberately redact this sensitive value.
+        """
         return self.__client_secret
     @client_secret.setter
     def client_secret(self, value: str) -> None:
         """Set the client secret and clear authentication caches.
+
+        Any cached credential, token, or composed client is discarded immediately.
 
         Args:
             value: Non-empty application client secret.
@@ -153,7 +177,11 @@ class GbAuth(object):
     
     @property
     def credential(self) -> ClientSecretCredential:
-        """Azure AD ClientSecretCredential for authentication."""
+        """Return the cached Azure AD client-secret credential.
+
+        The credential is created lazily from the configured tenant, client, and
+        secret values and is invalidated when any of them changes.
+        """
         
         if f"_{self.__auth_name}__credential" in self.__dict__:
             return self.__credential
@@ -163,7 +191,11 @@ class GbAuth(object):
     
     @property
     def token(self) -> str:
-        """Access token for Microsoft Graph API."""
+        """Return the cached access token used by the legacy API.
+
+        Unlike the composed transport, this property intentionally preserves the
+        original legacy behavior of caching the token string after acquisition.
+        """
         
         if f"_{self.__auth_name}__token" in self.__dict__:
             return self.__token
@@ -180,7 +212,10 @@ class GbAuth(object):
     
     @property
     def headers(self) -> dict:
-        """Headers for requests to Microsoft Graph API."""
+        """Return the legacy Microsoft Graph authorization headers.
+
+        Accessing this property may trigger lazy credential and token acquisition.
+        """
         # Preparazione dell'header di autorizzazione per le richieste Graph
         return {'Authorization': f'Bearer {self.token}'}
 
@@ -210,6 +245,9 @@ class GbAuth(object):
 class GbSite(GbAuth):
     """Provide the legacy SharePoint site interface.
 
+    A site can be constructed from authentication values or an existing
+    :class:`GbAuth`, in which case the underlying composed client is reused.
+
     Args:
         *args: Positional authentication arguments used without ``gb_auth``.
         hostname: SharePoint tenant hostname.
@@ -220,6 +258,9 @@ class GbSite(GbAuth):
     
     def __init__(self, *args, hostname: str, site_path: str, gb_auth: GbAuth | None = None, **kwargs) -> None:
         """Initialize the legacy site interface.
+
+        Site metadata remains lazy and is fetched only when an ID or data property
+        is accessed.
 
         Args:
             *args: Positional authentication arguments used without ``gb_auth``.
@@ -254,11 +295,17 @@ class GbSite(GbAuth):
     
     @property
     def hostname(self) -> str:
-        """Hostname of the SharePoint site."""
+        """Return the SharePoint site hostname.
+
+        The hostname forms the tenant portion of the legacy site-resolution URL.
+        """
         return self.__hostname
     @hostname.setter
     def hostname(self, value: str) -> None:
         """Set the SharePoint hostname.
+
+        This preserves the characterized legacy behavior and does not invalidate
+        site metadata that may already be cached.
 
         Args:
             value: Non-empty SharePoint hostname.
@@ -275,12 +322,18 @@ class GbSite(GbAuth):
         
     @property
     def site_path(self) -> str:
-        """Path of the SharePoint site."""
+        """Return the server-relative SharePoint site path.
+
+        The path is combined with the hostname when resolving site metadata.
+        """
         
         return self.__site_path
     @site_path.setter
     def site_path(self, value: str) -> None:
         """Set the server-relative site path.
+
+        This preserves the characterized legacy behavior and does not invalidate
+        metadata already stored on the object.
 
         Args:
             value: Non-empty site path.
@@ -297,13 +350,20 @@ class GbSite(GbAuth):
     
     @property
     def site_url(self) -> str:
-        """Constructs the SharePoint site URL."""
+        """Construct the SharePoint site-resolution URL.
+
+        The legacy property returns an absolute stable Graph v1.0 URL.
+        """
         
         return f"https://graph.microsoft.com/v1.0/sites/{self.hostname}:{self.site_path}"
     
     @property
     def site_data(self) -> dict:
-        """Fetches the SharePoint site data."""
+        """Fetch and cache the SharePoint site metadata.
+
+        Modern typed transport errors are wrapped in the ``RuntimeError`` shape
+        expected by the characterized legacy contract.
+        """
         
         if "_GbSite__site_data" in self.__dict__:
             return self.__site_data
@@ -318,7 +378,11 @@ class GbSite(GbAuth):
     
     @property
     def site_id(self) -> str:
-        """Returns the ID of the SharePoint site."""
+        """Return the SharePoint site identifier.
+
+        Accessing the property triggers lazy metadata retrieval and returns the
+        documented warning string if Graph omitted the ID.
+        """
         return self.site_data.get("id", "<WARNING SPM | Site ID not found>")
     
     
@@ -326,6 +390,9 @@ class GbSite(GbAuth):
     
 class GbList(GbSite):
     """Provide the legacy SharePoint list interface.
+
+    The class retains dictionary result shapes, cached metadata, local filtering,
+    heuristic field encoding, and legacy batch helpers during migration.
 
     Args:
         *args: Positional site or authentication arguments used without ``gb_site``.
@@ -336,6 +403,9 @@ class GbList(GbSite):
     
     def __init__(self, *args, list_name: str, gb_site: GbSite | None = None, **kwargs) -> None:
         """Initialize the legacy list interface.
+
+        An existing :class:`GbSite` may be injected to reuse its location,
+        credentials, and composed client; list metadata itself remains lazy.
 
         Args:
             *args: Positional site or authentication arguments used without ``gb_site``.
@@ -375,7 +445,11 @@ class GbList(GbSite):
     
     @property
     def encode_map(self) -> dict:
-        """Map of characters to be URL-encoded."""
+        """Return the legacy character-to-field-code mapping.
+
+        The table approximates SharePoint internal-name encoding and is retained
+        only for backward compatibility.
+        """
         self.__encode_map = {
             # Spazio e punteggiatura comune
             ' ': '_x0020_',
@@ -438,13 +512,19 @@ class GbList(GbSite):
     
     @property
     def decode_map(self) -> dict:
-        """Map of URL-encoded characters to their original form."""
+        """Return the inverse legacy field-name mapping.
+
+        It is generated from ``encode_map`` so encoding and decoding remain paired.
+        """
         
         self.__decode_map = {v: k for k, v in self.encode_map.items()}
         return self.__decode_map
     
     def decode_row(self, row: dict) -> dict:
         """Decode legacy SharePoint field names in a row.
+
+        Every encoded substring known to ``decode_map`` is replaced in each key;
+        values are preserved unchanged.
 
         Args:
             row: Field mapping whose keys should be decoded.
@@ -462,6 +542,9 @@ class GbList(GbSite):
     def encode_row(self, row: dict) -> dict:
         """Encode field names with the legacy character map.
 
+        This heuristic is retained for compatibility only and does not verify the
+        actual internal names stored in the list schema.
+
         Args:
             row: Field mapping whose keys should be encoded.
         """
@@ -477,11 +560,17 @@ class GbList(GbSite):
     
     @property
     def list_name(self) -> str:
-        """Name of the SharePoint element."""
+        """Return the configured SharePoint list name.
+
+        The value is used as a quoted title segment in the legacy list URL.
+        """
         return self.__list_name
     @list_name.setter
     def list_name(self, value: str) -> None:
         """Set the SharePoint list name.
+
+        Changing it preserves the characterized legacy behavior and does not clear
+        list metadata that may already be cached.
 
         Args:
             value: Non-empty list name or title.
@@ -498,13 +587,21 @@ class GbList(GbSite):
     
     @property
     def list_url(self) -> str:
-        """Constructs the URL for the SharePoint list."""
+        """Construct the stable Graph URL for the SharePoint list.
+
+        The configured list name is quoted and combined with the lazily resolved
+        site identifier.
+        """
         
         return f"https://graph.microsoft.com/v1.0/sites/{self.site_id}/lists/{quote(self.list_name)}"
     
     @property
     def list_data(self) -> dict:
-        """Fetches the SharePoint list data."""
+        """Fetch and cache the SharePoint list metadata.
+
+        The request uses the configured title path and wraps typed transport errors
+        in the legacy ``RuntimeError`` contract.
+        """
         
         if f"_{self.__list_obj_name}__list_data" in self.__dict__:
             return self.__list_data
@@ -519,13 +616,20 @@ class GbList(GbSite):
         
     @property
     def list_id(self) -> str:
-        """Returns the ID of the SharePoint list."""
+        """Return the SharePoint list identifier.
+
+        Access triggers lazy metadata retrieval and falls back to the documented
+        warning string when the response omits an ID.
+        """
         
         return self.list_data.get("id", f"<WARNING {self.__list_obj_name} | Element ID not found>")
     
     @property
     def list_items_all(self, top: int = 200) -> list[dict]:
         """Return all list items across every page.
+
+        The method eagerly follows every continuation link and preserves the raw
+        legacy dictionary shape rather than returning typed item models.
 
         Args:
             top: Requested page size for the initial Graph call.
@@ -548,7 +652,11 @@ class GbList(GbSite):
     
     @property
     def list_items(self) -> list:
-        """Fetches all items in the SharePoint list."""
+        """Fetch the first page of items in the SharePoint list.
+
+        Despite its historical name, this property performs one collection call;
+        ``list_items_all`` is the paginated variant.
+        """
         
         items_url = f"{self.list_url}/items?expand=fields"
         try:
@@ -562,20 +670,32 @@ class GbList(GbSite):
     
     @property
     def list_rows(self) -> list[dict]:
-        """Fetches all rows in the SharePoint list with their fields."""
+        """Return field dictionaries for all paginated list items.
+
+        Item metadata is discarded and only each item's ``fields`` mapping is
+        retained in the legacy result.
+        """
         
         self.__list_rows = [item["fields"] for item in self.list_items_all]
         return self.__list_rows
     
     @property
     def list_ids(self) -> list[str]:
-        """Fetches all IDs of items in the SharePoint list."""
+        """Return identifiers from all paginated list items.
+
+        Entries without an ``id`` property are omitted to preserve the legacy
+        collection shape.
+        """
         
         return [item.get("id", "None") for item in self.list_items_all if "id" in item]
     
     @property
     def list_fields(self) -> list[str]:
-        """Fetches all field names in the SharePoint list."""
+        """Return field names observed on the first list row.
+
+        An empty list produces an empty result, and heterogeneous later rows are
+        not inspected for additional fields.
+        """
         
         rows = self.list_rows
         return list(rows[0].keys()) if rows else []
@@ -752,6 +872,9 @@ class GbList(GbSite):
         """
         Delete one or more SharePoint list items by ID.
 
+        Every item is deleted independently, allowing the legacy result to report
+        partial success without raising for ordinary Graph request failures.
+
         Args:
             ids (str | list[str] | tuple[str] | set[str]): A single ID or a collection
                 of IDs. Single values are converted to a list.
@@ -795,6 +918,10 @@ class GbList(GbSite):
     
     def upload(self, ids: str | int | list[str | int] | tuple[str | int] | set[str | int], rows: dict | list[dict] | tuple[dict], force: bool = False, delete: bool = False) -> dict[str, Any]:
         """Apply the deprecated legacy upload workflow.
+
+        The adapter builds a modern synchronization plan but maps every outcome
+        back to the historical result sections. ``force`` performs PATCH updates,
+        never delete-and-recreate, and pruning runs after successful creates.
 
         Args:
             ids: Source item identifiers paired with rows.
@@ -955,6 +1082,9 @@ class GbList(GbSite):
     def create_many(self, rows: list[dict], batch_size: int = 20) -> dict:
         """Create multiple items with the legacy batch interface.
 
+        Rows are divided into caller-sized batches and returned as legacy success
+        and failure dictionaries rather than typed batch outcomes.
+
         Args:
             rows: Field mappings for the items to create.
             batch_size: Maximum number of items per batch request.
@@ -967,6 +1097,8 @@ class GbList(GbSite):
 
         def chunked(seq, size):
             """Split a sequence into fixed-size chunks.
+
+            Chunks preserve input order for legacy batch correlation.
 
             Args:
                 seq: Sequence to split.
@@ -1022,6 +1154,9 @@ class GbList(GbSite):
     def delete_many(self, ids, batch_size: int = 20, if_match: str | None = None) -> dict:
         """Delete multiple items with the legacy batch interface.
 
+        Each subrequest is correlated to its item ID and may carry the same
+        optional ``If-Match`` value for optimistic concurrency.
+
         Args:
             ids: One item ID or an iterable of item IDs.
             batch_size: Maximum number of items per batch request.
@@ -1041,6 +1176,8 @@ class GbList(GbSite):
 
         def chunked(seq, size):
             """Split a sequence into fixed-size chunks.
+
+            Chunks preserve input order for legacy batch correlation.
 
             Args:
                 seq: Sequence to split.

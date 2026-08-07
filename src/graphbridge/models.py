@@ -13,6 +13,9 @@ T = TypeVar("T")
 class GraphError:
     """Store a structured Microsoft Graph error.
 
+    The model keeps common diagnostic fields independent of the HTTP library and
+    preserves additional error details in ``inner_error``.
+
     Args:
         code: Graph error code.
         message: Safe human-readable message.
@@ -33,6 +36,9 @@ class GraphError:
 class SiteInfo:
     """Store common SharePoint site metadata.
 
+    Frequently used properties are exposed directly while the complete Graph
+    payload remains available through ``raw`` for forward compatibility.
+
     Args:
         id: Graph site identifier.
         display_name: Optional display name.
@@ -50,6 +56,9 @@ class SiteInfo:
     def from_payload(cls, payload: Mapping[str, Any]) -> SiteInfo:
         """Build site metadata from a Graph payload.
 
+        Known properties are normalized to simple optional strings without
+        discarding unknown values from the original mapping.
+
         Args:
             payload: Site response mapping.
         """
@@ -65,6 +74,9 @@ class SiteInfo:
 @dataclass(frozen=True, slots=True)
 class ListInfo:
     """Store common SharePoint list metadata.
+
+    The model extracts identity, timestamps, eTag, and template information while
+    retaining expanded relationships and unknown properties in ``raw``.
 
     Args:
         id: Graph list identifier.
@@ -93,6 +105,9 @@ class ListInfo:
     def from_payload(cls, payload: Mapping[str, Any]) -> ListInfo:
         """Build list metadata from a Graph payload.
 
+        The nested list facet is inspected for its template while all original
+        properties and expanded relationships remain available in ``raw``.
+
         Args:
             payload: List response mapping.
         """
@@ -117,6 +132,9 @@ class ListInfo:
 class ListItem:
     """Store a SharePoint list item and its fields.
 
+    Field annotations are removed from the convenient ``fields`` mapping but stay
+    available in ``raw``; eTags are collected from all documented locations.
+
     Args:
         id: Graph item identifier.
         fields: SharePoint field values.
@@ -139,6 +157,9 @@ class ListItem:
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any], *, fallback_id: str = "") -> ListItem:
         """Build a list item from a Graph payload.
+
+        Field annotations are separated from business values, and a fallback ID
+        supports successful update responses that omit top-level metadata.
 
         Args:
             payload: List-item response mapping.
@@ -169,6 +190,9 @@ class ListItem:
 class ColumnInfo:
     """Store a SharePoint column definition.
 
+    Known type facets are detected for convenient inspection, and the entire
+    definition is preserved so future Graph properties are not lost.
+
     Args:
         id: Graph column identifier.
         name: Optional internal field name.
@@ -190,6 +214,9 @@ class ColumnInfo:
     def from_payload(cls, payload: Mapping[str, Any]) -> ColumnInfo:
         """Build column metadata from a Graph payload.
 
+        The first recognized stable type facet is exposed directly without
+        removing unknown properties from the stored raw definition.
+
         Args:
             payload: Column response mapping.
         """
@@ -208,6 +235,9 @@ class ColumnInfo:
 @dataclass(frozen=True, slots=True)
 class ListItemVersion:
     """Store one retained SharePoint list item version.
+
+    The model exposes versioned fields and modification metadata while retaining
+    the raw response for less common version properties.
 
     Args:
         id: Version identifier.
@@ -228,6 +258,9 @@ class ListItemVersion:
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> ListItemVersion:
         """Build a version from a Graph payload.
+
+        Nested mappings are copied defensively so the resulting model is detached
+        from caller-owned response containers.
 
         Args:
             payload: Version response mapping.
@@ -253,6 +286,9 @@ class ListItemVersion:
 class DeletedListItem:
     """Store a list-item tombstone returned by a delta feed.
 
+    Tombstones identify deleted items without pretending that their former field
+    values are still available.
+
     Args:
         id: Deleted item identifier.
         state: Optional deletion state.
@@ -266,6 +302,9 @@ class DeletedListItem:
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> DeletedListItem:
         """Build a deletion tombstone from a Graph payload.
+
+        The optional deletion state is extracted while the original delta entry
+        is retained for endpoint-specific metadata.
 
         Args:
             payload: Delta entry mapping.
@@ -283,6 +322,9 @@ class DeletedListItem:
 @dataclass(frozen=True, slots=True)
 class DeltaResult:
     """Store one fully traversed list-item delta round.
+
+    Non-deleted entries remain ``unclassified`` unless the caller supplied known
+    IDs, because the Graph feed does not label them as creates or updates.
 
     Args:
         created: Items classified as newly created.
@@ -302,13 +344,19 @@ class DeltaResult:
 
     @property
     def cursor(self) -> str | None:
-        """Return the opaque delta link as a cursor alias."""
+        """Return the opaque delta link as a cursor alias.
+
+        Callers should persist and reuse the complete link without parsing it.
+        """
         return self.delta_link
 
 
 @dataclass(frozen=True, slots=True)
 class Page(Generic[T]):
     """Store one page from a Graph collection.
+
+    Parsed items are accompanied by continuation metadata and the unchanged raw
+    payload, allowing callers to inspect endpoint-specific annotations.
 
     Args:
         items: Parsed items in the page.
@@ -326,6 +374,9 @@ class Page(Generic[T]):
 class BatchResult(Generic[T]):
     """Store aggregate and per-input batch outcomes.
 
+    Convenience success and failure lists are provided alongside ``results``,
+    which retains a correlated outcome for every original input.
+
     Args:
         successes: Successfully parsed values.
         failures: Structured failures.
@@ -339,6 +390,9 @@ class BatchResult(Generic[T]):
 @dataclass(frozen=True, slots=True)
 class BatchItemResult(Generic[T]):
     """Store one batch outcome in original input order.
+
+    Both parsed values and raw response details are retained so callers can audit
+    partial success and retry behavior.
 
     Args:
         input_index: Position in the original input.
@@ -365,6 +419,9 @@ class BatchItemResult(Generic[T]):
 class SyncFieldDifference:
     """Store one field-level synchronization difference.
 
+    Recording both desired and current values makes a plan reviewable before any
+    write is authorized.
+
     Args:
         field: Field name.
         local_value: Desired source value.
@@ -376,7 +433,10 @@ class SyncFieldDifference:
     remote_value: Any
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the field difference to a dictionary."""
+        """Serialize the field difference to a dictionary.
+
+        Both source and remote values are preserved for review or audit output.
+        """
         return {
             "field": self.field,
             "local_value": self.local_value,
@@ -390,6 +450,9 @@ SyncOperationKind = Literal["create", "update", "delete", "unchanged"]
 @dataclass(frozen=True, slots=True)
 class SyncOperation:
     """Store one inspectable synchronization operation.
+
+    Each operation records its business key, source and remote positions,
+    concurrency token, reason, and any field-level changes.
 
     Args:
         operation: Operation kind.
@@ -414,7 +477,11 @@ class SyncOperation:
     remote_index: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the synchronization operation to a dictionary."""
+        """Serialize the synchronization operation to a dictionary.
+
+        Nested field differences are converted recursively while operation
+        correlation metadata remains intact.
+        """
         return {
             "operation": self.operation,
             "key": self.key,
@@ -431,6 +498,9 @@ class SyncOperation:
 @dataclass(frozen=True, slots=True)
 class SyncPlan:
     """Store a side-effect-free synchronization plan.
+
+    Creates, updates, deletes, and unchanged rows are kept separately so callers
+    can review exactly what an apply step would do.
 
     Args:
         creates: Planned create operations.
@@ -460,13 +530,23 @@ class SyncPlan:
 
     @property
     def operation_count(self) -> int:
-        """Return the number of mutating operations in the plan."""
+        """Return the number of mutating operations in the plan.
+
+        Unchanged rows are intentionally excluded because applying them performs
+        no remote write.
+        """
         return len(self.creates) + len(self.updates) + len(self.deletes)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the synchronization plan to a dictionary."""
+        """Serialize the synchronization plan to a dictionary.
+
+        The resulting structure contains only JSON-friendly mappings, lists, and
+        scalar values suitable for review logs or approval interfaces.
+        """
         def serialize(value: object) -> Any:
             """Serialize one plan entry.
+
+            Typed operations are expanded while already plain mappings are copied.
 
             Args:
                 value: Plan entry to serialize.
@@ -495,6 +575,9 @@ class SyncPlan:
 class SyncOperationResult:
     """Store the outcome of one synchronization operation.
 
+    An outcome distinguishes successful, failed, and deliberately deferred work
+    and retains the attempt count and status when available.
+
     Args:
         operation: Operation that was evaluated.
         value: Optional successful item or identifier.
@@ -513,11 +596,19 @@ class SyncOperationResult:
 
     @property
     def succeeded(self) -> bool:
-        """Return whether the operation succeeded without deferral."""
+        """Return whether the operation succeeded without deferral.
+
+        A deferred operation has no successful effect even when no ordinary Graph
+        error was raised for it.
+        """
         return self.error is None and not self.deferred
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the operation result to a dictionary."""
+        """Serialize the operation result to a dictionary.
+
+        Typed items and errors are reduced to plain reviewable structures while
+        status, attempt, and deferral information is preserved.
+        """
         value: Any = self.value
         if isinstance(value, ListItem):
             value = {
@@ -548,6 +639,9 @@ class SyncOperationResult:
 class SyncResult:
     """Store the aggregate result of applying a synchronization plan.
 
+    Successful values, unchanged work, failures, and ordered operation outcomes
+    remain available together with the source plan.
+
     Args:
         created: Items created successfully.
         updated: Items updated successfully.
@@ -570,7 +664,11 @@ class SyncResult:
     dry_run: bool = False
 
     def retry_plan(self) -> SyncPlan:
-        """Build a plan containing only failed or deferred operations."""
+        """Build a plan containing only failed or deferred operations.
+
+        Already successful mutations are excluded, preventing a retry from
+        replaying work that Graph has accepted.
+        """
 
         failed = [result.operation for result in self.results if not result.succeeded]
         source = self.plan
@@ -588,9 +686,15 @@ class SyncResult:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the synchronization result to a dictionary."""
+        """Serialize the synchronization result to a dictionary.
+
+        Models and structured errors are converted into reviewable plain values
+        without removing the correlation between operations and outcomes.
+        """
         def item(value: ListItem) -> dict[str, Any]:
             """Serialize one list item.
+
+            Only the fields needed by synchronization result output are included.
 
             Args:
                 value: List item to serialize.

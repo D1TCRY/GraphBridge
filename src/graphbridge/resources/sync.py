@@ -33,6 +33,9 @@ FieldNameMode = Literal["internal", "display"]
 class SyncService:
     """Build, apply, and retry list synchronization plans.
 
+    The service separates read-only planning from mutation so applications can
+    inspect business-key matches, field differences, eTags, and prune decisions.
+
     Args:
         client: Shared GraphBridge client.
         sharepoint_list: Parent SharePoint list.
@@ -62,6 +65,11 @@ class SyncService:
         field_names: FieldNameMode = "internal",
     ) -> SyncPlan:
         """Build a mutation-free synchronization plan.
+
+        Source rows are materialized once, key safety is validated on both sides,
+        and remote state is read once with only the fields needed for comparison.
+        Extra SharePoint fields do not cause updates because only source-owned
+        fields are compared.
 
         Args:
             rows: Source rows to compare with SharePoint.
@@ -135,6 +143,11 @@ class SyncService:
         sleep: Callable[[float], None] | None = None,
     ) -> SyncResult:
         """Apply a reviewed synchronization plan.
+
+        Mutations run in create, PATCH-update, then delete order. If any create
+        fails, all planned deletes are deferred so pruning cannot remove data while
+        a desired replacement is missing. Successful batch subrequests are never
+        replayed during transient retries.
 
         Args:
             plan: Synchronization plan to apply.
@@ -252,6 +265,9 @@ class SyncService:
     def retry(self, result: SyncResult, **apply_options: Any) -> SyncResult:
         """Retry only failed or deferred operations.
 
+        A reduced plan is derived from the previous correlated outcomes, excluding
+        all work that already succeeded.
+
         Args:
             result: Previous synchronization result.
             **apply_options: Options forwarded to :meth:`apply`.
@@ -273,6 +289,9 @@ class SyncService:
         prune: bool,
     ) -> SyncPlan:
         """Build a legacy item-ID synchronization plan.
+
+        This adapter reuses items already downloaded by ``GbList.upload`` and
+        preserves the legacy assumption that supplied keys are SharePoint item IDs.
 
         Args:
             rows: Legacy source rows.
@@ -382,6 +401,10 @@ class SyncService:
         field_names: FieldNameMode,
     ) -> SyncPlan:
         """Compare normalized source and remote rows by key.
+
+        Matching rows become updates only when source-owned values differ;
+        unmatched source rows become creates and remote-only rows are either kept
+        or planned for deletion according to ``prune``.
 
         Args:
             source: Normalized source rows.
@@ -500,6 +523,9 @@ class SyncService:
     ) -> None:
         """Apply create operations in batches.
 
+        Each chunk is isolated so an outer GraphBridge error is recorded against
+        only the operations affected by that batch call.
+
         Args:
             operations: Create operations to apply.
             created: Destination for successful items.
@@ -529,6 +555,9 @@ class SyncService:
         **batch_options: Any,
     ) -> None:
         """Apply update operations in batches.
+
+        Planned eTags travel with individual PATCH subrequests, preserving the
+        optimistic-concurrency snapshot captured during planning.
 
         Args:
             operations: Update operations to apply.
@@ -563,6 +592,9 @@ class SyncService:
     ) -> None:
         """Apply delete operations in batches.
 
+        This phase is invoked only after the create-safety barrier has confirmed
+        that no desired creation failed.
+
         Args:
             operations: Delete operations to apply.
             deleted: Destination for deleted item IDs.
@@ -593,6 +625,9 @@ class SyncService:
         outcomes: list[SyncOperationResult],
     ) -> None:
         """Apply create and update operations directly.
+
+        Direct mode is primarily used by compatibility paths and records each
+        exception independently instead of using the JSON batch endpoint.
 
         Args:
             creates: Create operations to apply.
@@ -666,6 +701,9 @@ class SyncService:
         outcomes: list[SyncOperationResult],
     ) -> None:
         """Record correlated outcomes from one batch.
+
+        The original operation is recovered through ``input_index`` so values and
+        errors remain correctly paired even if Graph reordered subresponses.
 
         Args:
             operations: Operations represented by the batch.
@@ -799,6 +837,9 @@ class SyncService:
     ) -> list[tuple[Any, int]]:
         """Validate source keys and return key/index pairs.
 
+        Missing, empty, and unhashable values are rejected before any remote
+        comparison or mutation can proceed.
+
         Args:
             rows: Normalized source rows.
             key_field: Required business-key field.
@@ -825,6 +866,9 @@ class SyncService:
         cls, items: Sequence[ListItem], key_field: str
     ) -> list[tuple[Any, int]]:
         """Validate remote keys and return key/index pairs.
+
+        Remote items follow the same safety rules as source rows so every planned
+        match is deterministic.
 
         Args:
             items: Remote SharePoint items.
@@ -892,6 +936,9 @@ class SyncService:
         local: Mapping[str, Any], remote: Mapping[str, Any]
     ) -> list[SyncFieldDifference]:
         """Compare source-owned fields with remote fields.
+
+        Fields present only on SharePoint are ignored; each returned difference
+        records both the desired source value and current remote value.
 
         Args:
             local: Desired source field values.

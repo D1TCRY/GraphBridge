@@ -17,6 +17,9 @@ _OPERATORS = frozenset({"eq", "ne", "lt", "gt", "le", "ge"})
 def escape_odata_string(value: str) -> str:
     """Escape a string for an OData literal.
 
+    Embedded single quotes are doubled according to OData rules so caller values
+    cannot terminate the surrounding string literal.
+
     Args:
         value: String to escape.
 
@@ -31,6 +34,9 @@ def escape_odata_string(value: str) -> str:
 
 def odata_literal(value: object) -> str:
     """Serialize a Python scalar as an OData v4 literal.
+
+    Only the scalar types deliberately supported by GraphBridge are accepted;
+    arbitrary objects are never converted with an unsafe generic string cast.
 
     Args:
         value: Supported scalar value to serialize.
@@ -64,6 +70,9 @@ def odata_literal(value: object) -> str:
 def validate_odata_path(value: str) -> str:
     """Validate a simple OData property path.
 
+    Every slash-separated segment must be a plain identifier, which keeps query
+    builders from accepting arbitrary OData syntax in property positions.
+
     Args:
         value: Property path to validate.
 
@@ -82,6 +91,9 @@ def validate_odata_path(value: str) -> str:
 class FilterExpression:
     """Store an OData filter and optional local predicate.
 
+    Controlled expressions can be sent to Graph or evaluated against downloaded
+    JSON-like items. Raw filters have no local evaluator.
+
     Args:
         expression: Server-side OData expression.
         _predicate: Optional equivalent local evaluator.
@@ -93,11 +105,18 @@ class FilterExpression:
     )
 
     def to_odata(self) -> str:
-        """Return the server-side OData expression."""
+        """Return the server-side OData expression.
+
+        The value is already escaped and validated by the builder that created the
+        expression.
+        """
         return self.expression
 
     def matches(self, item: Mapping[str, Any]) -> bool:
         """Evaluate the filter against one local item.
+
+        Local evaluation is available only for expressions created by controlled
+        builders and their logical combinations.
 
         Args:
             item: JSON-like item to test.
@@ -120,6 +139,8 @@ class FilterExpression:
             def predicate(item: Mapping[str, Any]) -> bool:
                 """Evaluate both local predicates.
 
+                Short-circuit evaluation mirrors the server-side logical AND.
+
                 Args:
                     item: JSON-like item to test.
                 """
@@ -138,6 +159,8 @@ class FilterExpression:
             def predicate(item: Mapping[str, Any]) -> bool:
                 """Evaluate either local predicate.
 
+                Short-circuit evaluation mirrors the server-side logical OR.
+
                 Args:
                     item: JSON-like item to test.
                 """
@@ -148,6 +171,9 @@ class FilterExpression:
 
 def compare(field_name: str, operator: str, value: object) -> FilterExpression:
     """Build a validated OData comparison.
+
+    The returned expression includes both safe server syntax and an equivalent
+    local predicate for explicit local-filter mode.
 
     Args:
         field_name: OData property path.
@@ -166,6 +192,8 @@ def compare(field_name: str, operator: str, value: object) -> FilterExpression:
 
     def predicate(item: Mapping[str, Any]) -> bool:
         """Evaluate the comparison locally.
+
+        The operator and reference value are captured from the validated builder.
 
         Args:
             item: JSON-like item to test.
@@ -189,6 +217,9 @@ def compare(field_name: str, operator: str, value: object) -> FilterExpression:
 def eq(field_name: str, value: object) -> FilterExpression:
     """Build an equality filter.
 
+    This convenience wrapper delegates validation, literal formatting, and local
+    predicate creation to :func:`compare`.
+
     Args:
         field_name: OData property path.
         value: Value that must match.
@@ -198,6 +229,9 @@ def eq(field_name: str, value: object) -> FilterExpression:
 
 def ne(field_name: str, value: object) -> FilterExpression:
     """Build an inequality filter.
+
+    This convenience wrapper delegates validation, literal formatting, and local
+    predicate creation to :func:`compare`.
 
     Args:
         field_name: OData property path.
@@ -209,6 +243,9 @@ def ne(field_name: str, value: object) -> FilterExpression:
 def startswith(field_name: str, value: str) -> FilterExpression:
     """Build an OData ``startswith`` filter.
 
+    The controlled expression also contains an equivalent local string-prefix
+    predicate for explicit fallback mode.
+
     Args:
         field_name: OData property path.
         value: Required string prefix.
@@ -219,6 +256,8 @@ def startswith(field_name: str, value: str) -> FilterExpression:
 
     def predicate(item: Mapping[str, Any]) -> bool:
         """Evaluate the prefix test locally.
+
+        Non-string and missing values do not satisfy the controlled expression.
 
         Args:
             item: JSON-like item to test.
@@ -233,6 +272,9 @@ def filter_from_mapping(
     values: Mapping[str, object], *, field_prefix: str | None = None
 ) -> FilterExpression | None:
     """Build an AND filter from mapping entries.
+
+    Each entry becomes an equality comparison, preserving mapping iteration order
+    and optionally prefixing simple names such as list-item fields.
 
     Args:
         values: Field names mapped to required values.
@@ -250,6 +292,9 @@ def filter_from_mapping(
 def fields_expand(fields: Sequence[str] | None = None) -> str:
     """Build a list-item fields expansion.
 
+    With selected names the result uses ``fields($select=...)``; otherwise it
+    requests the complete fields relationship.
+
     Args:
         fields: Optional field names to select.
     """
@@ -263,6 +308,9 @@ def fields_expand(fields: Sequence[str] | None = None) -> str:
 @dataclass(frozen=True, slots=True)
 class ODataQuery:
     """Store supported OData query options.
+
+    Serialization is intentionally limited to stable options used by known Graph
+    endpoints, while endpoint resources decide which options they expose.
 
     Args:
         select: Properties included with ``$select``.
@@ -280,6 +328,9 @@ class ODataQuery:
 
     def to_params(self) -> dict[str, str | int]:
         """Serialize configured options to request parameters.
+
+        Empty options are omitted and property paths, page size, and ordering
+        expressions are validated before any HTTP request is made.
 
         Raises:
             ValueError: If a path, page size, or ordering is invalid.

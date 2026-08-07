@@ -26,6 +26,9 @@ DEFAULT_MAX_RETRY_DELAY = 120.0
 class BatchRequest:
     """Represent one request in a Microsoft Graph JSON batch.
 
+    Subrequests use paths relative to the configured v1.0 root and carry their
+    own correlation ID, optional headers, body, and original input position.
+
     Args:
         id: Identifier used to correlate the subrequest.
         method: HTTP method for the subrequest.
@@ -44,6 +47,9 @@ class BatchRequest:
 
     def to_payload(self) -> dict[str, Any]:
         """Serialize the subrequest for the Graph batch endpoint.
+
+        Validation prevents beta or absolute URLs and rejects embedded bearer
+        authorization because authentication belongs to the outer batch call.
 
         Returns:
             A JSON-compatible subrequest mapping.
@@ -79,6 +85,9 @@ class BatchRequest:
 class BatchResponse:
     """Represent one batch response and its original request.
 
+    Correlation is retained even when Microsoft Graph returns subresponses in a
+    different order from the submitted requests.
+
     Args:
         request: Original correlated batch request.
         status_code: HTTP status returned for the subrequest.
@@ -95,11 +104,18 @@ class BatchResponse:
 
     @property
     def succeeded(self) -> bool:
-        """Return whether the subrequest completed successfully."""
+        """Return whether the subrequest completed successfully.
+
+        Any HTTP status in the inclusive 200-299 range is treated as success.
+        """
         return 200 <= self.status_code < 300
 
     def to_error(self) -> GraphError:
-        """Convert a failed subresponse into a structured Graph error."""
+        """Convert a failed subresponse into a structured Graph error.
+
+        The generated error includes correlation and attempt metadata so partial
+        batch failures can be traced back to their original inputs.
+        """
         error_payload: Mapping[str, Any] = {}
         if isinstance(self.body, Mapping) and isinstance(self.body.get("error"), Mapping):
             error_payload = self.body["error"]
@@ -125,6 +141,9 @@ class BatchResponse:
 def chunks(values: Sequence[T], size: int = MAX_BATCH_REQUESTS) -> Iterator[Sequence[T]]:
     """Split values into Graph-compatible batch chunks.
 
+    Microsoft Graph accepts at most twenty requests per JSON batch, so larger
+    sequences are divided without changing their order.
+
     Args:
         values: Ordered values to split.
         size: Maximum number of values per chunk.
@@ -140,6 +159,9 @@ def chunks(values: Sequence[T], size: int = MAX_BATCH_REQUESTS) -> Iterator[Sequ
 
 def batch_payload(requests: Sequence[BatchRequest]) -> dict[str, list[dict[str, Any]]]:
     """Build the payload for one Graph batch call.
+
+    Request IDs are validated case-insensitively because response correlation
+    treats IDs the same way.
 
     Args:
         requests: Subrequests to include in the batch.
@@ -163,6 +185,10 @@ def execute_batch(
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[BatchResponse]:
     """Execute batches and retry only transient subrequests.
+
+    Inputs are chunked at twenty requests, correlated by ID, and returned in
+    original order. Only HTTP 408, 429, and 5xx subrequests are replayed; already
+    successful operations are never submitted again.
 
     Args:
         transport: Transport used to call the Graph batch endpoint.

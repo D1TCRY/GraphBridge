@@ -41,6 +41,9 @@ _IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 class GraphTransport:
     """Send authenticated requests through one reusable HTTP session.
 
+    The transport centralizes authentication, timeouts, retry policy, safe URL
+    resolution, response decoding, token redaction, and typed HTTP errors.
+
     Args:
         credential: Credential used to acquire Microsoft Graph tokens.
         session: Optional HTTP session reused for all requests.
@@ -69,6 +72,9 @@ class GraphTransport:
         scope: str = GRAPH_SCOPE,
     ) -> None:
         """Initialize and validate the HTTP transport.
+
+        Configuration is rejected eagerly so every later request has a finite
+        timeout, bounded retry behavior, and a safe Microsoft Graph v1.0 root.
 
         Args:
             credential: Credential used to acquire access tokens.
@@ -121,6 +127,10 @@ class GraphTransport:
         retry: bool | None = None,
     ) -> Any:
         """Send one authenticated Microsoft Graph request.
+
+        A fresh token is requested for every attempt. Safe methods retry eligible
+        network, throttling, and server failures within the configured budget;
+        non-idempotent methods are not replayed unless explicitly requested.
 
         Args:
             method: HTTP method to send.
@@ -189,7 +199,9 @@ class GraphTransport:
             raise self._build_http_error(response, token=token, retry_after=retry_after)
 
     def get(self, url: str, **kwargs: Any) -> Any:
-        """Send a GET request.
+        """Send a GET request through the shared request pipeline.
+
+        GET is retry-eligible by default because it is treated as idempotent.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -198,7 +210,9 @@ class GraphTransport:
         return self.request("GET", url, **kwargs)
 
     def post(self, url: str, **kwargs: Any) -> Any:
-        """Send a POST request.
+        """Send a POST request through the shared request pipeline.
+
+        POST is not retried automatically by default to avoid duplicating writes.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -207,7 +221,10 @@ class GraphTransport:
         return self.request("POST", url, **kwargs)
 
     def patch(self, url: str, **kwargs: Any) -> Any:
-        """Send a PATCH request.
+        """Send a PATCH request through the shared request pipeline.
+
+        PATCH is not retried automatically by default because replay safety
+        depends on the operation and its concurrency conditions.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -216,7 +233,9 @@ class GraphTransport:
         return self.request("PATCH", url, **kwargs)
 
     def put(self, url: str, **kwargs: Any) -> Any:
-        """Send a PUT request.
+        """Send a PUT request through the shared request pipeline.
+
+        PUT is considered idempotent and is retry-eligible by default.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -225,7 +244,10 @@ class GraphTransport:
         return self.request("PUT", url, **kwargs)
 
     def delete(self, url: str, **kwargs: Any) -> Any:
-        """Send a DELETE request.
+        """Send a DELETE request through the shared request pipeline.
+
+        DELETE is retry-eligible by default and can include caller-provided
+        conditional headers such as ``If-Match``.
 
         Args:
             url: Relative or permitted absolute Graph URL.
@@ -234,7 +256,11 @@ class GraphTransport:
         return self.request("DELETE", url, **kwargs)
 
     def close(self) -> None:
-        """Close the underlying HTTP session."""
+        """Close the underlying HTTP session.
+
+        Closing releases connection-pool resources owned by the injected or
+        internally created session.
+        """
         self.session.close()
 
     def __enter__(self) -> GraphTransport:
@@ -255,6 +281,9 @@ class GraphTransport:
 
     def _resolve_url(self, url: str) -> str:
         """Resolve and validate a request URL.
+
+        Absolute continuation links are accepted only when they remain on the
+        configured origin and below its v1.0 path, preventing token forwarding.
 
         Args:
             url: Relative or absolute URL to validate.
@@ -284,6 +313,9 @@ class GraphTransport:
     def _parse_success(self, response: requests.Response, *, token: str) -> Any:
         """Decode and redact a successful response.
 
+        Empty HTTP successes remain distinct from an empty JSON object. Any
+        occurrence of the current access token is removed recursively.
+
         Args:
             response: Successful HTTP response.
             token: Access token that must be redacted.
@@ -306,6 +338,9 @@ class GraphTransport:
         retry_after: float | None,
     ) -> GraphBridgeError:
         """Convert a failed HTTP response into a typed exception.
+
+        Graph error metadata and response headers are preserved after redaction,
+        and common status codes map to specialized exception subclasses.
 
         Args:
             response: Failed HTTP response.
@@ -379,6 +414,9 @@ class GraphTransport:
     def _validated_base_url(value: str) -> str:
         """Validate and normalize a Graph v1.0 base URL.
 
+        The URL must be HTTPS, contain no credentials or query data, and terminate
+        at a v1.0 root used to confine later absolute links.
+
         Args:
             value: Base URL to validate.
 
@@ -404,6 +442,9 @@ class GraphTransport:
         value: float | tuple[float, float],
     ) -> float | tuple[float, float]:
         """Validate an HTTP timeout value.
+
+        Both scalar timeouts and separate connect/read pairs are supported, but
+        every component must be finite and strictly positive.
 
         Args:
             value: Positive scalar or connect/read timeout pair.

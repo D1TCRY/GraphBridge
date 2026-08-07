@@ -21,6 +21,9 @@ def iter_pages(
 ) -> Iterator[Page[T]]:
     """Lazily retrieve and parse Graph collection pages.
 
+    Query parameters are applied only to the first request. Each continuation
+    link returned by Graph is then forwarded verbatim through the safe transport.
+
     Args:
         transport: Transport used for collection requests.
         url: Initial collection URL.
@@ -62,6 +65,9 @@ def iter_items(
     parser: Callable[[Mapping[str, Any]], T],
 ) -> Iterator[T]:
     """Lazily yield all items from a paginated collection.
+
+    This is a convenience layer over :func:`iter_pages` and does not materialize
+    the complete collection in memory.
 
     Args:
         transport: Transport used for collection requests.
