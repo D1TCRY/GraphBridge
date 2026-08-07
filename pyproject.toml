@@ -1,0 +1,101 @@
+[project]
+name = "graphbridge"
+version = "0.1.0"
+description = "A lightweight app-only Microsoft Graph client for SharePoint site and list operations."
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENCE"]
+authors = [
+    { name = "Cecchelani Diego", email = "ceccdieg@gmail.com" },
+]
+keywords = [
+    "azure",
+    "entra-id",
+    "microsoft-graph",
+    "sharepoint",
+    "sharepoint-online",
+]
+dependencies = [
+    "azure-identity>=1.24.0,<2",
+    "requests>=2.32.5,<3",
+]
+
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.11",
+    "pytest>=8.3",
+    "pytest-cov>=5",
+    "responses>=0.25",
+    "ruff>=0.8",
+    "tomli>=2; python_version < '3.11'",
+]
+
+[project.urls]
+Homepage = "https://pypi.org/project/graphbridge/"
+Documentation = "https://pypi.org/project/graphbridge/"
+
+[build-system]
+requires = ["setuptools>=77.0.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["graphbridge*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers -p no:cacheprovider"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: opt-in tests against a dedicated Microsoft 365 test site and list",
+    "integration_write: opt-in integration tests that create, update, and clean up their own list item",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["graphbridge"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 85
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/conftest.py" = ["E402", "I001"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/graphbridge", "example.py", "examples"]
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = ["src/graphbridge.egg-info/"]

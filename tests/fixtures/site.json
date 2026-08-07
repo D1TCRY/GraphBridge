@@ -1,0 +1,5 @@
+{
+  "id": "example.invalid,site-collection-id,site-web-id",
+  "displayName": "Unit Tests",
+  "webUrl": "https://tenant.example.invalid/sites/UnitTests"
+}

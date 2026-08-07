@@ -1,0 +1,7 @@
+{
+  "value": [
+    {"id": "1", "fields": {"Title": "First", "Status": "Open"}},
+    {"id": "2", "fields": {"Title": "Second", "Status": "Done"}}
+  ],
+  "@odata.nextLink": "https://graph.microsoft.com/v1.0/test/next-page"
+}
